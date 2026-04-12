@@ -50,6 +50,9 @@ class Pipeline(private val cfg: PipelineConfig) {
                         }
                     } while (target.pageSize != null && result.rowsLoaded.toInt() == target.pageSize)
 
+                    // Final watermark update with OK status
+                    WatermarkStore.finishRun(oracleConn, target.name, lastWm, totalLoaded)
+                    oracleConn.commit()
                     println("[${target.name}] OK: total_loaded=$totalLoaded, total_merged=$totalMerged, new_wm=$lastWm")
                 } catch (e: Exception) {
                     runCatching { oracleConn.rollback() }
