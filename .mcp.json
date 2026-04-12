@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "fusion-metadata-go": {
+      "command": "/Users/sergeyrudenko_1_2/projects/of_rag/ofmcp",
+      "args": ["--db", "/Users/sergeyrudenko_1_2/projects/of_rag/metadata.db"],
+      "env": {
+        "FUSION_HOST": "https://fa-erci-dev1-saasfaprod1.fa.ocs.oraclecloud.com",
+        "FUSION_SQL_REPORT_PATH": "/Custom/CloudSQL/RP_ARB.xdo",
+        "LICENSE_PATH": "/Users/sergeyrudenko_1_2/projects/of_rag/license.json",
+        "GEMINI_API_KEY": "AIzaSyCk8gAsjfFAN_v7eYzW3kRcgXhF9xGRjjs"
+      }
+    },
+    "intelij": {
+      "type": "sse",
+      "url": "http://localhost:64342/sse",
+      "headers": {
+        "IJ_MCP_SERVER_PROJECT_PATH": "/Users/sergeyrudenko_1_2/projects/of_rag"
+      }
+    }
+  }
+}
