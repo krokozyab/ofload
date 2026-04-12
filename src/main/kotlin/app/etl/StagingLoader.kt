@@ -1,17 +1,23 @@
 package app.etl
 
 import app.config.TargetConfig
+import org.slf4j.LoggerFactory
+import org.slf4j.MDC
 import java.sql.Connection
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 data class LoadResult(val rowsLoaded: Long, val newWm: String?, val lastKeyValue: String?)
 
 object StagingLoader {
+    private val log = LoggerFactory.getLogger(StagingLoader::class.java)
     private const val BATCH_SIZE = 10000
 
     fun load(target: TargetConfig, sourceConn: Connection, oracleConn: Connection,
              lastWm: String?, lastKeyValue: String?): LoadResult {
+        val t = target.name
         // 1. TRUNCATE staging
-        println("[${target.name}] Truncating ${target.stagingTable}...")
+        log.info("[{}] Truncating {}", t, target.stagingTable)
         oracleConn.createStatement().use { it.execute("TRUNCATE TABLE ${target.stagingTable}") }
 
         // 2. NLS + performance
@@ -22,12 +28,19 @@ object StagingLoader {
             st.execute("ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,'")
         }
 
-        // 3. Build query
-        val wm = lastWm ?: target.initialWm
+        // 3. Build query — apply lookback on first page only
+        val rawWm = lastWm ?: target.initialWm
+        val wm = if (target.lookbackMinutes != null && lastKeyValue == null && lastWm != null) {
+            val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss[.SSSSSS][.SSSSS][.SSSS][.SSS][.SS][.S]")
+            val adjusted = LocalDateTime.parse(rawWm, fmt).minusMinutes(target.lookbackMinutes)
+            adjusted.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+                .also { log.info("[{}] Lookback {}min: wm adjusted {} -> {}", t, target.lookbackMinutes, rawWm, it) }
+        } else {
+            rawWm
+        }
         val keyCol = target.keyColumns[0]
         val query = if (target.pageSize != null) {
             if (lastKeyValue != null) {
-                // Keyset pagination: skip already-seen rows with same watermark
                 val baseQuery = target.sourceQuery.replace(
                     "${target.watermarkColumn} > ?",
                     "(${target.watermarkColumn} > ? OR (${target.watermarkColumn} = ? AND $keyCol > ?))"
@@ -41,7 +54,7 @@ object StagingLoader {
         }
 
         // 4. Read from source
-        println("[${target.name}] Reading from source (wm=$wm, lastKey=$lastKeyValue, pageSize=${target.pageSize ?: "unlimited"})...")
+        log.info("[{}] Reading from source (wm={}, lastKey={}, pageSize={})", t, wm, lastKeyValue, target.pageSize ?: "unlimited")
         val rows = mutableListOf<Array<Any?>>()
         val keyColIdx = target.columns.indexOf(keyCol)
         val startRead = System.currentTimeMillis()
@@ -61,15 +74,15 @@ object StagingLoader {
             }
         }
         val readTime = System.currentTimeMillis() - startRead
-        println("[${target.name}] Source: ${rows.size} rows read in ${readTime}ms")
+        log.info("[{}] Source: {} rows read in {}ms", t, rows.size, readTime)
 
         if (rows.isEmpty()) return LoadResult(0, lastWm, lastKeyValue)
 
-        // 5. Capture last key value from the last row
+        // 5. Capture last key value
         val newLastKey = rows.last()[keyColIdx]?.toString()
 
         // 6. Insert into staging
-        println("[${target.name}] Inserting ${rows.size} rows into ${target.stagingTable}...")
+        log.info("[{}] Inserting {} rows into {}", t, rows.size, target.stagingTable)
         val placeholders = target.columns.joinToString(", ") { "?" }
         val insertSql = "INSERT /*+ APPEND_VALUES */ INTO ${target.stagingTable} (${target.columns.joinToString(", ")}) VALUES ($placeholders)"
         val startInsert = System.currentTimeMillis()
@@ -84,14 +97,14 @@ object StagingLoader {
                 if (inserted % BATCH_SIZE == 0L) {
                     insPs.executeBatch()
                     oracleConn.commit()
-                    println("[${target.name}] Inserted $inserted / ${rows.size} rows...")
+                    log.info("[{}] Inserted {} / {} rows", t, inserted, rows.size)
                 }
             }
             if (inserted % BATCH_SIZE != 0L) insPs.executeBatch()
             oracleConn.commit()
         }
         val insertTime = System.currentTimeMillis() - startInsert
-        println("[${target.name}] Inserted ${rows.size} rows in ${insertTime}ms")
+        log.info("[{}] Inserted {} rows in {}ms", t, rows.size, insertTime)
 
         // 7. Get new watermark
         val newWm = oracleConn.createStatement().use { st ->

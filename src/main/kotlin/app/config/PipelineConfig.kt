@@ -15,7 +15,9 @@ data class TargetConfig(
     val columns: List<String>,
     val sourceQuery: String,
     val initialWm: String,
-    val pageSize: Int? = null
+    val pageSize: Int? = null,
+    val lookbackMinutes: Long? = null,
+    val group: Int? = null
 )
 
 @Serializable
