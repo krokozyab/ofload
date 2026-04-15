@@ -1,0 +1,13 @@
+<configuration>
+    <!-- JSON format for OCI Logging -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder" />
+    </appender>
+
+    <!-- Suppress noisy Oracle JDBC logging -->
+    <logger name="oracle" level="WARN" />
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE" />
+    </root>
+</configuration>

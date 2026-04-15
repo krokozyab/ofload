@@ -1,0 +1,1185 @@
+<!DOCTYPE html>
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Targets Editor | ETL Architect</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+    tailwind.config = {
+        darkMode: "class",
+        theme: {
+            extend: {
+                "colors": {
+                    "outline": "#8c716c",
+                    "on-primary-container": "#fff6f5",
+                    "surface-container-high": "#eae8e7",
+                    "secondary-container": "#a0ecf7",
+                    "tertiary": "#954000",
+                    "surface-container-lowest": "#ffffff",
+                    "primary-fixed-dim": "#ffb4a7",
+                    "primary": "#a52e1f",
+                    "on-tertiary-container": "#fff7f4",
+                    "surface-tint": "#ac3323",
+                    "on-background": "#1b1c1c",
+                    "on-tertiary-fixed-variant": "#773200",
+                    "on-secondary-fixed-variant": "#004f57",
+                    "surface-dim": "#dbd9d9",
+                    "tertiary-fixed-dim": "#ffb68f",
+                    "on-secondary": "#ffffff",
+                    "on-secondary-container": "#126d77",
+                    "surface-container-highest": "#e4e2e2",
+                    "on-error": "#ffffff",
+                    "secondary-fixed-dim": "#87d2de",
+                    "inverse-primary": "#ffb4a7",
+                    "surface-container-low": "#f5f3f3",
+                    "on-tertiary": "#ffffff",
+                    "on-secondary-fixed": "#001f23",
+                    "on-primary-fixed": "#400100",
+                    "tertiary-container": "#ba5409",
+                    "on-tertiary-fixed": "#331100",
+                    "on-surface": "#1b1c1c",
+                    "secondary": "#076872",
+                    "error-container": "#ffdad6",
+                    "error": "#ba1a1a",
+                    "surface-bright": "#fbf9f8",
+                    "surface": "#fbf9f8",
+                    "primary-container": "#c74634",
+                    "on-error-container": "#93000a",
+                    "surface-variant": "#e4e2e2",
+                    "outline-variant": "#e0bfba",
+                    "on-primary-fixed-variant": "#8b1a0e",
+                    "on-primary": "#ffffff",
+                    "primary-fixed": "#ffdad4",
+                    "on-surface-variant": "#59413d",
+                    "background": "#fbf9f8",
+                    "secondary-fixed": "#a3effa",
+                    "inverse-on-surface": "#f2f0f0",
+                    "tertiary-fixed": "#ffdbca",
+                    "surface-container": "#f0eded",
+                    "inverse-surface": "#303030"
+                },
+                "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+                },
+                "fontFamily": {
+                    "headline": ["Manrope"],
+                    "body": ["Inter"],
+                    "label": ["Inter"],
+                    "mono": ["JetBrains Mono"]
+                }
+            },
+        },
+    }
+</script>
+<style>
+    .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        display: inline-block;
+        line-height: 1;
+        vertical-align: middle;
+    }
+    .primary-gradient {
+        background: linear-gradient(135deg, #a52e1f 0%, #c74634 100%);
+    }
+    .custom-shadow {
+        box-shadow: 0 12px 32px -4px rgba(140, 113, 108, 0.12);
+    }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #e4e2e2; border-radius: 10px; }
+    ::-webkit-scrollbar-thumb:hover { background: #8c716c; }
+
+    #toast-container {
+        position: fixed;
+        top: 1rem;
+        right: 1rem;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    .toast {
+        padding: 0.75rem 1.25rem;
+        border-radius: 0.5rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #fff;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        animation: slideIn 0.3s ease-out;
+        max-width: 360px;
+    }
+    .toast-success { background: #076872; }
+    .toast-error { background: #ba1a1a; }
+    .toast-info { background: #59413d; }
+    @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes slideOut {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
+    }
+</style>
+</head>
+<body class="bg-surface font-body text-on-surface selection:bg-primary-fixed selection:text-on-primary-fixed">
+
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
+<!-- Confirm Dialog -->
+<div id="confirm-dialog" class="fixed inset-0 z-[100] hidden items-center justify-center bg-black/30 backdrop-blur-sm">
+    <div class="bg-surface-container-lowest rounded-2xl p-8 custom-shadow max-w-md w-full mx-4">
+        <h3 id="confirm-title" class="font-headline font-bold text-lg text-on-surface mb-2"></h3>
+        <p id="confirm-message" class="text-sm text-on-surface-variant mb-6"></p>
+        <div class="flex items-center gap-2 mb-4" id="confirm-options"></div>
+        <div class="flex justify-end gap-3">
+            <button id="confirm-cancel" class="px-5 py-2 text-sm font-bold text-on-surface-variant hover:text-on-surface transition-colors">Cancel</button>
+            <button id="confirm-ok" class="px-5 py-2 rounded-xl text-sm font-bold text-white bg-error hover:opacity-90 transition-opacity">Delete</button>
+        </div>
+    </div>
+</div>
+
+<div class="flex h-screen overflow-hidden">
+<!-- SideNavBar -->
+<aside class="bg-[#f5f3f3] dark:bg-stone-900 h-screen w-64 border-r-0 flex flex-col py-4 shrink-0">
+    <div class="px-6 mb-8">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl primary-gradient flex items-center justify-center text-white shadow-lg">
+                <span class="material-symbols-outlined" data-icon="hub">hub</span>
+            </div>
+            <div>
+                <h2 class="font-headline font-bold text-lg tracking-tight text-on-surface leading-tight">ETL Architect</h2>
+                <div class="flex items-center gap-1.5">
+                    <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+                    <span class="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant opacity-60">Active Workspace</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <nav class="flex-1 px-4 space-y-1">
+        <div class="mb-4">
+            <p class="px-4 text-[11px] font-bold text-on-surface-variant/40 uppercase tracking-[0.2em] mb-2">Service</p>
+            <div class="px-4 py-2 bg-surface-container-high/50 rounded-xl flex items-center justify-between">
+                <span class="font-headline font-bold text-sm text-on-surface">ckh_dw</span>
+                <span class="flex h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
+            </div>
+        </div>
+        <!-- Dashboard -->
+        <a class="flex items-center gap-3 px-4 py-3 rounded-xl text-[#59413d] dark:text-[#8c716c] opacity-80 font-['Inter'] text-sm font-medium hover:bg-[#e4e2e2] dark:hover:bg-stone-800 transition-all duration-200 ease-in-out" href="/">
+            <span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+            <span>Dashboard</span>
+        </a>
+        <!-- Targets (Active) -->
+        <a class="flex items-center gap-3 px-4 py-3 rounded-xl text-[#a52e1f] dark:text-[#c74634] font-bold border-r-4 border-[#a52e1f] bg-[#ffffff] dark:bg-stone-800/50 font-['Inter'] text-sm transition-all duration-200 ease-in-out" href="/targets">
+            <span class="material-symbols-outlined" data-icon="target" style="font-variation-settings: 'FILL' 1;">target</span>
+            <span>Targets</span>
+        </a>
+    </nav>
+    <div class="px-4 mt-auto">
+        <button onclick="newTarget()" class="w-full primary-gradient text-white py-3 rounded-xl font-headline font-bold text-sm shadow-lg flex items-center justify-center gap-2 hover:opacity-90 transition-opacity">
+            <span class="material-symbols-outlined text-sm" data-icon="add">add</span>
+            <span>New Target</span>
+        </button>
+    </div>
+</aside>
+
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col bg-surface relative">
+    <!-- TopAppBar -->
+    <header class="bg-[#fbf9f8] dark:bg-stone-950 flex justify-between items-center w-full px-8 h-20 shrink-0 top-0 z-50">
+        <div class="flex flex-col">
+            <h1 class="font-headline font-extrabold text-2xl text-[#59413d] dark:text-[#e4e2e2] tracking-tight">Targets Configuration</h1>
+            <p class="text-sm text-on-surface-variant/70 font-medium">Manage ETL target definitions, columns, and database schema.</p>
+        </div>
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-1">
+                <button class="p-2 rounded-full hover:bg-[#f5f3f3] transition-colors text-on-surface-variant">
+                    <span class="material-symbols-outlined" data-icon="monitor_heart">monitor_heart</span>
+                </button>
+                <button class="p-2 rounded-full hover:bg-[#f5f3f3] transition-colors text-on-surface-variant">
+                    <span class="material-symbols-outlined" data-icon="settings">settings</span>
+                </button>
+                <button class="p-2 rounded-full hover:bg-[#f5f3f3] transition-colors text-on-surface-variant">
+                    <span class="material-symbols-outlined" data-icon="help">help</span>
+                </button>
+            </div>
+            <div class="h-8 w-[1px] bg-outline-variant/20 mx-2"></div>
+            <div class="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                <span class="material-symbols-outlined text-primary">person</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Workspace Body -->
+    <div class="flex flex-1 overflow-hidden">
+        <!-- Left Panel: Target List (35%) -->
+        <section class="w-[35%] flex flex-col bg-surface-container-low/30 border-r border-transparent">
+            <div class="p-6 pb-2">
+                <div class="relative">
+                    <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50" data-icon="filter_list">filter_list</span>
+                    <input id="filter-input" class="w-full bg-surface-container-lowest border-none rounded-xl pl-10 pr-4 py-3 text-sm focus:ring-2 focus:ring-primary/10 shadow-sm" placeholder="Filter targets..." type="text"/>
+                </div>
+            </div>
+            <div id="target-list" class="flex-1 overflow-y-auto p-6 pt-4 space-y-4">
+                <!-- Dynamically populated -->
+            </div>
+        </section>
+
+        <!-- Right Panel: Target Editor Form (65%) -->
+        <section id="editor-panel" class="flex-1 flex flex-col bg-surface overflow-y-auto">
+            <div id="editor-empty" class="flex-1 flex items-center justify-center">
+                <div class="text-center">
+                    <span class="material-symbols-outlined text-6xl text-on-surface-variant/20 mb-4">target</span>
+                    <p class="text-on-surface-variant/50 font-medium">Select a target or create a new one</p>
+                </div>
+            </div>
+            <div id="editor-form" class="hidden">
+                <div class="p-8 pb-32 space-y-10">
+                    <!-- Section 1: Basic Info -->
+                    <section>
+                        <div class="flex items-center gap-3 mb-6">
+                            <span class="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                                <span class="material-symbols-outlined text-xl" data-icon="info">info</span>
+                            </span>
+                            <h4 class="font-headline font-bold text-lg text-on-surface">Basic Configuration</h4>
+                        </div>
+                        <div class="grid grid-cols-3 gap-6">
+                            <div class="space-y-1.5">
+                                <label class="block text-xs font-bold text-on-surface-variant/60 uppercase tracking-wider ml-1">Target Name</label>
+                                <input id="f-name" class="w-full bg-surface-container-highest/50 border-none rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary/20 font-mono" type="text" placeholder="my_table"/>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="block text-xs font-bold text-on-surface-variant/60 uppercase tracking-wider ml-1">Staging Table</label>
+                                <input id="f-staging" class="w-full bg-surface-container-highest/50 border-none rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary/20 font-mono" type="text"/>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="block text-xs font-bold text-on-surface-variant/60 uppercase tracking-wider ml-1">Target Table</label>
+                                <input id="f-target" class="w-full bg-surface-container-highest/50 border-none rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary/20 font-mono" type="text"/>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="block text-xs font-bold text-on-surface-variant/60 uppercase tracking-wider ml-1">Group</label>
+                                <input id="f-group" class="w-full bg-surface-container-highest/50 border-none rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary/20" type="number" min="1" value="1"/>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="block text-xs font-bold text-on-surface-variant/60 uppercase tracking-wider ml-1">Page Size</label>
+                                <input id="f-pagesize" class="w-full bg-surface-container-highest/50 border-none rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary/20" type="number" value="10000"/>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="block text-xs font-bold text-on-surface-variant/60 uppercase tracking-wider ml-1">Lookback (min)</label>
+                                <input id="f-lookback" class="w-full bg-surface-container-highest/50 border-none rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary/20" type="number" value="60"/>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- Section 2: Watermark Config -->
+                    <section>
+                        <div class="flex items-center gap-3 mb-6">
+                            <span class="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                                <span class="material-symbols-outlined text-xl" data-icon="ink_highlighter">ink_highlighter</span>
+                            </span>
+                            <h4 class="font-headline font-bold text-lg text-on-surface">Watermark Config</h4>
+                        </div>
+                        <div class="flex items-end gap-6 bg-surface-container-low p-6 rounded-2xl">
+                            <div class="flex-1 space-y-1.5">
+                                <label class="block text-xs font-bold text-on-surface-variant/60 uppercase tracking-wider ml-1">Watermark Column</label>
+                                <input id="f-wmcol" class="w-full bg-surface-container-lowest border-none rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary/20 font-mono" type="text" value="LAST_UPDATE_DATE"/>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="block text-xs font-bold text-on-surface-variant/60 uppercase tracking-wider ml-1 text-center">Type</label>
+                                <div class="flex bg-surface-container-highest p-1 rounded-xl">
+                                    <button id="wm-type-ts" onclick="setWmType('TIMESTAMP')" class="px-4 py-2 bg-surface-container-lowest rounded-lg text-xs font-bold text-primary shadow-sm">TIMESTAMP</button>
+                                    <button id="wm-type-num" onclick="setWmType('NUMBER')" class="px-4 py-2 text-xs font-bold text-on-surface-variant/60 hover:text-on-surface">NUMBER</button>
+                                </div>
+                            </div>
+                            <div class="flex-1 space-y-1.5">
+                                <label class="block text-xs font-bold text-on-surface-variant/60 uppercase tracking-wider ml-1">Initial WM</label>
+                                <input id="f-initialwm" class="w-full bg-surface-container-lowest border-none rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary/20 font-mono" type="text" value="1970-01-01 00:00:00"/>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- Section 3: Columns Editor -->
+                    <section>
+                        <div class="flex justify-between items-end mb-6">
+                            <div class="flex items-center gap-3">
+                                <span class="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                                    <span class="material-symbols-outlined text-xl" data-icon="table_chart">table_chart</span>
+                                </span>
+                                <h4 class="font-headline font-bold text-lg text-on-surface">Columns Editor</h4>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="addColumn()" class="px-4 py-2 rounded-xl text-xs font-bold text-primary border border-primary/20 hover:bg-primary/5 transition-colors flex items-center gap-2">
+                                    <span class="material-symbols-outlined text-sm" data-icon="add">add</span>
+                                    Add Column
+                                </button>
+                            </div>
+                        </div>
+                        <div class="bg-surface-container-low rounded-2xl overflow-hidden">
+                            <table class="w-full text-left">
+                                <thead>
+                                    <tr class="text-[11px] font-bold text-on-surface-variant/50 uppercase tracking-widest border-b border-surface-container-highest/30">
+                                        <th class="px-6 py-4">Column Name</th>
+                                        <th class="px-6 py-4">Data Type</th>
+                                        <th class="px-6 py-4">Length</th>
+                                        <th class="px-6 py-4 text-center">Nullable</th>
+                                        <th class="px-6 py-4 text-center">Key</th>
+                                        <th class="px-6 py-4 w-10"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="columns-tbody" class="text-sm font-medium">
+                                    <!-- Dynamically populated -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    <!-- Section 4: Source Query -->
+                    <section>
+                        <div class="flex items-center gap-3 mb-4">
+                            <span class="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                                <span class="material-symbols-outlined text-xl" data-icon="code">code</span>
+                            </span>
+                            <h4 class="font-headline font-bold text-lg text-on-surface">Source Query</h4>
+                            <div id="query-warning" class="hidden ml-3 flex items-center gap-1.5 bg-tertiary-fixed text-on-tertiary-fixed px-3 py-1 rounded-full text-[11px] font-bold">
+                                <span class="material-symbols-outlined text-sm">warning</span>
+                                Custom query — auto-generation disabled
+                            </div>
+                            <button onclick="parseQueryAndGenerate()" class="ml-auto px-4 py-2 rounded-xl text-xs font-bold text-white primary-gradient shadow-sm hover:opacity-90 transition-opacity flex items-center gap-2">
+                                <span class="material-symbols-outlined text-sm">auto_fix_high</span>
+                                Parse &amp; Generate
+                            </button>
+                        </div>
+                        <p class="text-xs text-on-surface-variant/60 mb-3 ml-1">Paste a SELECT query and click "Parse &amp; Generate" to auto-fill columns, table names, and watermark.</p>
+                        <div class="bg-[#1b1c1c] rounded-2xl p-6 custom-shadow relative">
+                            <div class="absolute top-4 right-4 flex gap-2">
+                                <button onclick="regenerateQuery()" class="p-2 text-white/40 hover:text-white transition-colors" title="Regenerate from columns">
+                                    <span class="material-symbols-outlined text-sm">refresh</span>
+                                </button>
+                                <button onclick="copyToClipboard(document.getElementById('f-query').value)" class="p-2 text-white/40 hover:text-white transition-colors" title="Copy">
+                                    <span class="material-symbols-outlined text-sm" data-icon="content_copy">content_copy</span>
+                                </button>
+                            </div>
+                            <textarea id="f-query" class="w-full bg-transparent border-none text-emerald-400/90 font-mono text-sm leading-relaxed focus:ring-0 resize-y min-h-[120px]" rows="6" spellcheck="false"></textarea>
+                        </div>
+                    </section>
+
+                    <!-- Section 5: DDL Preview -->
+                    <section>
+                        <div class="flex justify-between items-center mb-6">
+                            <div class="flex items-center gap-3">
+                                <span class="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                                    <span class="material-symbols-outlined text-xl" data-icon="database">database</span>
+                                </span>
+                                <h4 class="font-headline font-bold text-lg text-on-surface">DDL Generation</h4>
+                            </div>
+                            <div id="ddl-status" class="flex items-center gap-2"></div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-6 mb-6">
+                            <div class="space-y-3">
+                                <div class="flex justify-between items-center px-1">
+                                    <label class="text-[10px] font-bold text-on-surface-variant/50 uppercase tracking-widest">Staging DDL</label>
+                                    <button onclick="copyToClipboard(document.getElementById('ddl-staging').textContent)" class="text-[10px] font-bold text-primary uppercase hover:underline">Copy</button>
+                                </div>
+                                <div class="bg-[#1b1c1c] rounded-2xl p-4 h-48 overflow-y-auto">
+                                    <pre id="ddl-staging" class="font-mono text-[11px] text-gray-300 whitespace-pre-wrap"></pre>
+                                </div>
+                            </div>
+                            <div class="space-y-3">
+                                <div class="flex justify-between items-center px-1">
+                                    <label class="text-[10px] font-bold text-on-surface-variant/50 uppercase tracking-widest">Target DDL</label>
+                                    <button onclick="copyToClipboard(document.getElementById('ddl-target').textContent)" class="text-[10px] font-bold text-primary uppercase hover:underline">Copy</button>
+                                </div>
+                                <div class="bg-[#1b1c1c] rounded-2xl p-4 h-48 overflow-y-auto">
+                                    <pre id="ddl-target" class="font-mono text-[11px] text-gray-300 whitespace-pre-wrap"></pre>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex justify-end gap-3">
+                            <button onclick="executeDdl()" class="px-6 py-2.5 rounded-xl text-sm font-bold border border-primary text-primary hover:bg-primary/5 transition-colors flex items-center gap-2">
+                                <span class="material-symbols-outlined text-lg" data-icon="play_circle">play_circle</span>
+                                Execute DDL
+                            </button>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Sticky Bottom Action Bar -->
+    <footer id="action-bar" class="absolute bottom-0 left-0 right-0 bg-surface/80 backdrop-blur-md border-t border-surface-container-high px-8 py-4 z-[60] hidden">
+        <div class="flex items-center justify-end gap-4 max-w-7xl mx-auto">
+            <button onclick="cancelEdit()" class="px-6 py-2.5 text-sm font-bold text-on-surface-variant hover:text-on-surface transition-colors">
+                Cancel
+            </button>
+            <button onclick="saveAndExecuteDdl()" class="px-6 py-2.5 rounded-xl text-sm font-bold text-primary border border-primary/20 hover:bg-primary/5 transition-colors">
+                Save &amp; Execute DDL
+            </button>
+            <button onclick="saveTarget()" class="px-8 py-2.5 rounded-xl text-sm font-bold text-white primary-gradient shadow-lg shadow-primary/20 hover:opacity-90 transition-opacity">
+                Save Target
+            </button>
+        </div>
+    </footer>
+</main>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────
+let targets = [];           // array from API
+let selectedName = null;    // currently selected target name, null = new
+let isNewTarget = false;
+let columnDefs = [];        // [{name, type, length, nullable, key}]
+let queryManuallyEdited = false;
+let wmType = 'TIMESTAMP';
+
+// ── Toast ──────────────────────────────────────────────────
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease-in forwards';
+        setTimeout(() => toast.remove(), 300);
+    }, 5000);
+}
+
+// ── Clipboard ──────────────────────────────────────────────
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        showToast('Copied to clipboard', 'success');
+    }).catch(() => {
+        showToast('Copy failed', 'error');
+    });
+}
+
+// ── Confirmation Dialog ────────────────────────────────────
+function showConfirm(title, message, optionsHtml, onConfirm) {
+    const dlg = document.getElementById('confirm-dialog');
+    document.getElementById('confirm-title').textContent = title;
+    document.getElementById('confirm-message').textContent = message;
+    document.getElementById('confirm-options').innerHTML = optionsHtml || '';
+    dlg.classList.remove('hidden');
+    dlg.classList.add('flex');
+
+    const okBtn = document.getElementById('confirm-ok');
+    const cancelBtn = document.getElementById('confirm-cancel');
+
+    function cleanup() {
+        dlg.classList.add('hidden');
+        dlg.classList.remove('flex');
+        okBtn.replaceWith(okBtn.cloneNode(true));
+        cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+    }
+
+    document.getElementById('confirm-ok').addEventListener('click', () => {
+        cleanup();
+        onConfirm();
+    });
+    document.getElementById('confirm-cancel').addEventListener('click', cleanup);
+}
+
+// ── API ────────────────────────────────────────────────────
+async function fetchTargets() {
+    try {
+        const resp = await fetch('/api/targets');
+        const data = await resp.json();
+        targets = data.targets || [];
+        renderTargetList();
+    } catch (e) {
+        showToast('Failed to load targets: ' + e.message, 'error');
+    }
+}
+
+// ── Render Target List ─────────────────────────────────────
+function renderTargetList() {
+    const container = document.getElementById('target-list');
+    const filter = (document.getElementById('filter-input').value || '').toLowerCase();
+    const filtered = targets.filter(t => t.name.toLowerCase().includes(filter));
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<div class="text-center text-on-surface-variant/50 text-sm py-8">No targets found</div>';
+        return;
+    }
+
+    container.innerHTML = filtered.map(t => {
+        const isActive = t.name === selectedName && !isNewTarget;
+        const activeClasses = isActive
+            ? 'bg-surface-container-lowest border-l-[4px] border-primary custom-shadow'
+            : 'bg-surface-container-lowest/50 border-l-[4px] border-transparent hover:bg-surface-container-lowest';
+        const nameClasses = isActive ? 'text-on-surface' : 'text-on-surface-variant/80';
+        const dotClasses = isActive ? 'bg-emerald-500' : 'bg-outline-variant';
+        const groupClasses = isActive
+            ? 'bg-secondary/10 text-secondary'
+            : 'bg-outline-variant/20 text-on-surface-variant';
+        const sourceTable = deriveSourceTable(t.targetTable);
+
+        return `
+        <div class="${activeClasses} p-5 rounded-xl transition-all group cursor-pointer" onclick="selectTarget('${t.name}')">
+            <div class="flex justify-between items-start mb-3">
+                <div>
+                    <div class="flex items-center gap-2 mb-1">
+                        <h3 class="font-headline font-bold ${nameClasses}">${t.name}</h3>
+                        <span class="w-2 h-2 rounded-full ${dotClasses}"></span>
+                    </div>
+                    <p class="text-[11px] font-mono text-on-surface-variant/60 uppercase">${sourceTable}</p>
+                </div>
+                <span class="${groupClasses} text-[10px] font-bold px-2 py-1 rounded-full">Group ${t.group}</span>
+            </div>
+            <div class="flex justify-between items-end">
+                <div class="flex items-center gap-4 text-xs font-medium text-on-surface-variant/${isActive ? '70' : '50'}">
+                    <div class="flex items-center gap-1">
+                        <span class="material-symbols-outlined text-sm" data-icon="view_column">view_column</span>
+                        <span>${t.columns.length} Cols</span>
+                    </div>
+                    <div class="flex items-center gap-1">
+                        <span class="material-symbols-outlined text-sm" data-icon="vpn_key">vpn_key</span>
+                        <span>${t.keyColumns.length} Keys</span>
+                    </div>
+                </div>
+                <button onclick="event.stopPropagation(); deleteTarget('${t.name}')" class="p-1.5 text-on-surface-variant/40 hover:text-error hover:bg-error-container/20 rounded-lg transition-colors">
+                    <span class="material-symbols-outlined text-lg" data-icon="delete">delete</span>
+                </button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ── Derive source table from target table ──────────────────
+function deriveSourceTable(targetTable) {
+    if (!targetTable) return '';
+    if (targetTable.startsWith('T_')) return targetTable.substring(2);
+    return targetTable;
+}
+
+// ── Select Target ──────────────────────────────────────────
+function selectTarget(name) {
+    const t = targets.find(x => x.name === name);
+    if (!t) return;
+
+    selectedName = name;
+    isNewTarget = false;
+    queryManuallyEdited = false;
+
+    // Populate form
+    const nameInput = document.getElementById('f-name');
+    nameInput.value = t.name;
+    nameInput.readOnly = true;
+    nameInput.classList.add('opacity-60');
+
+    document.getElementById('f-staging').value = t.stagingTable;
+    document.getElementById('f-target').value = t.targetTable;
+    document.getElementById('f-group').value = t.group;
+    document.getElementById('f-pagesize').value = t.pageSize;
+    document.getElementById('f-lookback').value = t.lookbackMinutes;
+    document.getElementById('f-wmcol').value = t.watermarkColumn;
+    document.getElementById('f-initialwm').value = t.initialWm;
+
+    wmType = t.watermarkType || 'TIMESTAMP';
+    updateWmTypeButtons();
+
+    // Build column defs from column name strings + keyColumns
+    columnDefs = t.columns.map(colName => ({
+        name: colName,
+        type: 'VARCHAR2',
+        length: 240,
+        nullable: !t.keyColumns.includes(colName),
+        key: t.keyColumns.includes(colName)
+    }));
+    renderColumns();
+
+    // Set source query
+    document.getElementById('f-query').value = t.sourceQuery || '';
+    document.getElementById('query-warning').classList.add('hidden');
+
+    showEditor();
+    renderTargetList();
+    fetchDdlPreview(name);
+}
+
+// ── New Target ─────────────────────────────────────────────
+function newTarget() {
+    selectedName = null;
+    isNewTarget = true;
+    queryManuallyEdited = false;
+
+    const nameInput = document.getElementById('f-name');
+    nameInput.value = '';
+    nameInput.readOnly = false;
+    nameInput.classList.remove('opacity-60');
+
+    document.getElementById('f-staging').value = '';
+    document.getElementById('f-target').value = '';
+    document.getElementById('f-group').value = 1;
+    document.getElementById('f-pagesize').value = 10000;
+    document.getElementById('f-lookback').value = 60;
+    document.getElementById('f-wmcol').value = 'LAST_UPDATE_DATE';
+    document.getElementById('f-initialwm').value = '1970-01-01 00:00:00';
+
+    wmType = 'TIMESTAMP';
+    updateWmTypeButtons();
+
+    columnDefs = [];
+    renderColumns();
+
+    document.getElementById('f-query').value = '';
+    document.getElementById('query-warning').classList.add('hidden');
+
+    // Clear DDL
+    document.getElementById('ddl-staging').textContent = '-- Save target first to generate DDL';
+    document.getElementById('ddl-target').textContent = '-- Save target first to generate DDL';
+    document.getElementById('ddl-status').innerHTML = '';
+
+    showEditor();
+    renderTargetList();
+}
+
+// ── Show/hide editor ───────────────────────────────────────
+function showEditor() {
+    document.getElementById('editor-empty').classList.add('hidden');
+    document.getElementById('editor-form').classList.remove('hidden');
+    document.getElementById('action-bar').classList.remove('hidden');
+}
+
+function cancelEdit() {
+    if (selectedName && !isNewTarget) {
+        selectTarget(selectedName);
+    } else {
+        document.getElementById('editor-empty').classList.remove('hidden');
+        document.getElementById('editor-form').classList.add('hidden');
+        document.getElementById('action-bar').classList.add('hidden');
+        selectedName = null;
+        isNewTarget = false;
+        renderTargetList();
+    }
+}
+
+// ── Watermark type toggle ──────────────────────────────────
+function setWmType(type) {
+    wmType = type;
+    updateWmTypeButtons();
+}
+
+function updateWmTypeButtons() {
+    const tsBtn = document.getElementById('wm-type-ts');
+    const numBtn = document.getElementById('wm-type-num');
+    if (wmType === 'TIMESTAMP') {
+        tsBtn.className = 'px-4 py-2 bg-surface-container-lowest rounded-lg text-xs font-bold text-primary shadow-sm';
+        numBtn.className = 'px-4 py-2 text-xs font-bold text-on-surface-variant/60 hover:text-on-surface';
+    } else {
+        numBtn.className = 'px-4 py-2 bg-surface-container-lowest rounded-lg text-xs font-bold text-primary shadow-sm';
+        tsBtn.className = 'px-4 py-2 text-xs font-bold text-on-surface-variant/60 hover:text-on-surface';
+    }
+}
+
+// ── Auto-generate table names from target name ─────────────
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('f-name').addEventListener('input', (e) => {
+        if (!isNewTarget) return;
+        const name = e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '');
+        document.getElementById('f-staging').value = name ? 'STG_' + name : '';
+        document.getElementById('f-target').value = name ? 'T_' + name : '';
+    });
+
+    // Track manual query edits
+    document.getElementById('f-query').addEventListener('input', () => {
+        const autoQuery = generateQueryFromColumns();
+        if (document.getElementById('f-query').value.trim() !== autoQuery.trim()) {
+            queryManuallyEdited = true;
+            document.getElementById('query-warning').classList.remove('hidden');
+        }
+    });
+
+    // Filter
+    document.getElementById('filter-input').addEventListener('input', renderTargetList);
+});
+
+// ── Columns Editor ─────────────────────────────────────────
+function renderColumns() {
+    const tbody = document.getElementById('columns-tbody');
+    if (columnDefs.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="px-6 py-8 text-center text-on-surface-variant/50">No columns defined. Click "Add Column" to start.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = columnDefs.map((col, i) => {
+        const isVarchar = col.type === 'VARCHAR2';
+        const keyIcon = col.key
+            ? `<span class="material-symbols-outlined text-primary text-xl cursor-pointer" onclick="toggleKey(${i})" style="font-variation-settings: 'FILL' 1;">vpn_key</span>`
+            : `<span class="material-symbols-outlined text-on-surface-variant/30 text-xl cursor-pointer hover:text-primary/50" onclick="toggleKey(${i})">vpn_key</span>`;
+
+        return `
+        <tr class="bg-surface-container-lowest/40 hover:bg-surface-container-lowest transition-colors border-b border-surface-container-highest/20">
+            <td class="px-6 py-3">
+                <input type="text" value="${escHtml(col.name)}" onchange="updateCol(${i}, 'name', this.value.toUpperCase())"
+                    class="w-full bg-transparent border-none p-0 text-sm font-mono ${col.key ? 'text-primary' : 'text-on-surface'} focus:ring-0" placeholder="COLUMN_NAME"/>
+            </td>
+            <td class="px-6 py-3">
+                <select onchange="updateCol(${i}, 'type', this.value)" class="bg-transparent border-none p-0 text-sm focus:ring-0">
+                    <option ${col.type === 'NUMBER' ? 'selected' : ''}>NUMBER</option>
+                    <option ${col.type === 'VARCHAR2' ? 'selected' : ''}>VARCHAR2</option>
+                    <option ${col.type === 'TIMESTAMP' ? 'selected' : ''}>TIMESTAMP</option>
+                    <option ${col.type === 'DATE' ? 'selected' : ''}>DATE</option>
+                    <option ${col.type === 'CLOB' ? 'selected' : ''}>CLOB</option>
+                </select>
+            </td>
+            <td class="px-6 py-3">
+                ${isVarchar
+                    ? `<input type="number" value="${col.length || 240}" onchange="updateCol(${i}, 'length', parseInt(this.value))"
+                        class="w-16 bg-surface-container-highest/30 border-none rounded px-2 py-1 text-xs focus:ring-1 focus:ring-primary/20"/>`
+                    : `<span class="text-on-surface-variant/40">-</span>`}
+            </td>
+            <td class="px-6 py-3 text-center">
+                <input type="checkbox" ${col.nullable ? 'checked' : ''} onchange="updateCol(${i}, 'nullable', this.checked)"
+                    class="rounded text-primary focus:ring-primary/20 border-outline-variant/30"/>
+            </td>
+            <td class="px-6 py-3 text-center">${keyIcon}</td>
+            <td class="px-6 py-3">
+                <button onclick="removeColumn(${i})" class="text-on-surface-variant/40 hover:text-error transition-colors">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </td>
+        </tr>`;
+    }).join('');
+
+    // Auto-update query if not manually edited
+    if (!queryManuallyEdited) {
+        document.getElementById('f-query').value = generateQueryFromColumns();
+    }
+    // Auto-update client DDL
+    updateClientDdl();
+}
+
+function escHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function addColumn() {
+    columnDefs.push({ name: '', type: 'VARCHAR2', length: 240, nullable: true, key: false });
+    renderColumns();
+    // Focus the last name input
+    const inputs = document.querySelectorAll('#columns-tbody input[type="text"]');
+    if (inputs.length > 0) inputs[inputs.length - 1].focus();
+}
+
+function removeColumn(index) {
+    columnDefs.splice(index, 1);
+    renderColumns();
+}
+
+function updateCol(index, field, value) {
+    columnDefs[index][field] = value;
+    if (field === 'name') {
+        // Re-render to update key icon coloring
+        renderColumns();
+    } else if (field === 'type') {
+        renderColumns();
+    } else {
+        // Light updates - just refresh query/DDL
+        if (!queryManuallyEdited) {
+            document.getElementById('f-query').value = generateQueryFromColumns();
+        }
+        updateClientDdl();
+    }
+}
+
+function toggleKey(index) {
+    columnDefs[index].key = !columnDefs[index].key;
+    if (columnDefs[index].key) {
+        columnDefs[index].nullable = false;
+    }
+    renderColumns();
+}
+
+// ── Query Generation ───────────────────────────────────────
+function generateQueryFromColumns() {
+    const cols = columnDefs.filter(c => c.name.trim()).map(c => c.name.trim());
+    if (cols.length === 0) return '';
+    const targetTable = document.getElementById('f-target').value;
+    const sourceTable = deriveSourceTable(targetTable);
+    const wmCol = document.getElementById('f-wmcol').value || 'LAST_UPDATE_DATE';
+    return `SELECT ${cols.join(', ')} FROM ${sourceTable} WHERE ${wmCol} > ?`;
+}
+
+function regenerateQuery() {
+    queryManuallyEdited = false;
+    document.getElementById('f-query').value = generateQueryFromColumns();
+    document.getElementById('query-warning').classList.add('hidden');
+    showToast('Query regenerated from columns', 'info');
+}
+
+function parseQueryAndGenerate() {
+    const raw = document.getElementById('f-query').value.trim();
+    if (!raw) { showToast('Paste a SELECT query first', 'error'); return; }
+
+    // Normalize whitespace
+    const sql = raw.replace(/\s+/g, ' ');
+
+    // Extract columns: between SELECT and FROM
+    const selectMatch = sql.match(/SELECT\s+(.+?)\s+FROM\s+/i);
+    if (!selectMatch) { showToast('Cannot parse: expected SELECT ... FROM ...', 'error'); return; }
+
+    const colsPart = selectMatch[1];
+    const columns = colsPart.split(',').map(c => {
+        // Handle "alias.COLUMN" and "COLUMN AS alias" patterns
+        let col = c.trim();
+        col = col.replace(/^[a-zA-Z0-9_]+\./, ''); // strip table alias "h."
+        col = col.replace(/\s+AS\s+\w+$/i, '');    // strip AS alias
+        return col.trim().toUpperCase();
+    }).filter(c => c && c !== '*');
+
+    if (columns.length === 0) { showToast('No columns found in SELECT', 'error'); return; }
+
+    // Extract source table: between FROM and WHERE (or end)
+    const fromMatch = sql.match(/FROM\s+([a-zA-Z0-9_.]+)/i);
+    const sourceTable = fromMatch ? fromMatch[1].replace(/^[a-zA-Z0-9_]+\./, '').toUpperCase() : '';
+
+    // Extract watermark column: "COLUMN > ?" in WHERE
+    const wmMatch = sql.match(/WHERE\s+(?:[a-zA-Z0-9_]+\.)?([a-zA-Z0-9_]+)\s*>\s*\?/i);
+    const wmCol = wmMatch ? wmMatch[1].toUpperCase() : 'LAST_UPDATE_DATE';
+
+    // Auto-generate target name from source table
+    const targetName = sourceTable.toLowerCase().replace(/_all$/i, '');
+    if (isNewTarget || !document.getElementById('f-name').readOnly) {
+        document.getElementById('f-name').value = targetName;
+    }
+    document.getElementById('f-staging').value = 'STG_' + sourceTable;
+    document.getElementById('f-target').value = 'T_' + sourceTable;
+    document.getElementById('f-wmcol').value = wmCol;
+
+    // Build column defs — guess type from name patterns
+    columnDefs = columns.map(name => ({
+        name: name,
+        type: guessColumnType(name),
+        length: guessColumnType(name) === 'VARCHAR2' ? 240 : null,
+        nullable: name !== columns[0] && name !== wmCol, // first col + wm usually NOT NULL
+        key: name === columns[0] // first column is likely the PK
+    }));
+
+    renderColumns();
+    queryManuallyEdited = true; // don't overwrite the pasted query
+    document.getElementById('query-warning').classList.remove('hidden');
+
+    updateClientDdl();
+    showToast(`Parsed ${columns.length} columns from ${sourceTable}`, 'success');
+}
+
+function guessColumnType(name) {
+    const n = name.toUpperCase();
+    if (n.endsWith('_ID') || n === 'OBJECT_VERSION_NUMBER' || n.endsWith('_TOTAL') ||
+        n.endsWith('_DR') || n.endsWith('_CR') || n === 'EMPLOYEES_TOTAL' ||
+        n.endsWith('_AMOUNT') || n === 'AMOUNT_PAID' || n.endsWith('_RATE') ||
+        n.endsWith('_CROSS_RATE') || n === 'YEAR_ESTABLISHED' || n === 'ROWS_LOADED' ||
+        n === 'PAYMENT_CROSS_RATE' || n === 'INVOICE_AMOUNT' || n === 'BASE_AMOUNT' ||
+        n === 'EXCHANGE_RATE' || n === 'CONTROL_TOTAL' || n === 'DOC_SEQUENCE_VALUE' ||
+        n === 'DOC_SEQUENCE_ID') return 'NUMBER';
+    if (n.endsWith('_DATE') || n === 'DATE_CREATED' || n === 'POSTED_DATE' ||
+        n === 'INVOICE_DATE' || n === 'TERMS_DATE' || n === 'GL_DATE' ||
+        n === 'EXCHANGE_DATE' || n === 'REFERENCE_DATE' || n === 'CANCELLED_DATE' ||
+        n === 'DEFAULT_EFFECTIVE_DATE' || n === 'EARLIEST_POSTABLE_DATE' ||
+        n === 'DATE_OF_BIRTH') return 'DATE';
+    if (n === 'LAST_UPDATE_DATE' || n === 'CREATION_DATE') return 'TIMESTAMP';
+    if (n.endsWith('_FLAG') || n === 'STATUS' || n === 'ACTUAL_FLAG' ||
+        n === 'PAYMENT_STATUS_FLAG') return 'VARCHAR2';
+    return 'VARCHAR2';
+}
+
+// ── Client-side DDL Generation ─────────────────────────────
+function generateDdl(tableName, includeKeys) {
+    const cols = columnDefs.filter(c => c.name.trim());
+    if (cols.length === 0) return '-- No columns defined';
+
+    const keyNames = cols.filter(c => c.key).map(c => c.name.trim());
+    const lines = cols.map(c => {
+        let def = '    ' + c.name.trim();
+        if (c.type === 'VARCHAR2') {
+            def += ' VARCHAR2(' + (c.length || 240) + ')';
+        } else {
+            def += ' ' + c.type;
+        }
+        if (!c.nullable) def += ' NOT NULL';
+        return def;
+    });
+
+    if (includeKeys && keyNames.length > 0) {
+        lines.push('    CONSTRAINT PK_' + tableName + ' PRIMARY KEY (' + keyNames.join(', ') + ')');
+    }
+
+    return 'CREATE TABLE ' + tableName + ' (\n' + lines.join(',\n') + '\n);';
+}
+
+function updateClientDdl() {
+    const stagingTable = document.getElementById('f-staging').value;
+    const targetTable = document.getElementById('f-target').value;
+
+    // Generate client-side DDL from column editor
+    if (columnDefs.length > 0) {
+        document.getElementById('ddl-staging').textContent = stagingTable
+            ? generateDdl(stagingTable, false)
+            : '-- Define target name first';
+        document.getElementById('ddl-target').textContent = targetTable
+            ? generateDdl(targetTable, true)
+            : '-- Define target name first';
+    }
+}
+
+// ── Server DDL Fetch ───────────────────────────────────────
+async function fetchDdlPreview(name) {
+    try {
+        const resp = await fetch('/api/targets/' + encodeURIComponent(name) + '/ddl');
+        if (!resp.ok) {
+            // Fall back to client-side DDL
+            updateClientDdl();
+            return;
+        }
+        const data = await resp.json();
+        // Use server DDL only if tables exist; otherwise use client-generated DDL
+        if (data.stagingTableExists) {
+            document.getElementById('ddl-staging').textContent = data.stagingDdl || '-- Not available';
+        } else {
+            updateClientDdl();
+        }
+        if (data.targetTableExists) {
+            document.getElementById('ddl-target').textContent = data.targetDdl || '-- Not available';
+        } else if (!data.stagingTableExists) {
+            // Client DDL already set by updateClientDdl() above
+        }
+
+        // Status badges
+        const statusHtml = [];
+        if (data.stagingTableExists) {
+            statusHtml.push(`<span class="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full text-xs font-bold">
+                <span class="material-symbols-outlined text-base" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+                Staging exists
+            </span>`);
+        } else {
+            statusHtml.push(`<span class="flex items-center gap-1.5 bg-tertiary-fixed text-on-tertiary-fixed-variant px-3 py-1.5 rounded-full text-xs font-bold">
+                <span class="material-symbols-outlined text-base">info</span>
+                Staging not found
+            </span>`);
+        }
+        if (data.targetTableExists) {
+            statusHtml.push(`<span class="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full text-xs font-bold">
+                <span class="material-symbols-outlined text-base" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+                Target exists
+            </span>`);
+        } else {
+            statusHtml.push(`<span class="flex items-center gap-1.5 bg-tertiary-fixed text-on-tertiary-fixed-variant px-3 py-1.5 rounded-full text-xs font-bold">
+                <span class="material-symbols-outlined text-base">info</span>
+                Target not found
+            </span>`);
+        }
+        document.getElementById('ddl-status').innerHTML = statusHtml.join('');
+    } catch (e) {
+        // Fall back to client-side DDL
+        updateClientDdl();
+    }
+}
+
+// ── Build target JSON from form ────────────────────────────
+function buildTargetJson() {
+    const name = document.getElementById('f-name').value.trim();
+    if (!name) {
+        showToast('Target name is required', 'error');
+        return null;
+    }
+
+    const cols = columnDefs.filter(c => c.name.trim());
+    if (cols.length === 0) {
+        showToast('At least one column is required', 'error');
+        return null;
+    }
+
+    const columns = cols.map(c => c.name.trim());
+    const keyColumns = cols.filter(c => c.key).map(c => c.name.trim());
+
+    return {
+        name: name,
+        stagingTable: document.getElementById('f-staging').value.trim(),
+        targetTable: document.getElementById('f-target').value.trim(),
+        watermarkColumn: document.getElementById('f-wmcol').value.trim(),
+        watermarkType: wmType,
+        keyColumns: keyColumns,
+        columns: columns,
+        sourceQuery: document.getElementById('f-query').value.trim(),
+        initialWm: document.getElementById('f-initialwm').value.trim(),
+        pageSize: parseInt(document.getElementById('f-pagesize').value) || 10000,
+        lookbackMinutes: parseInt(document.getElementById('f-lookback').value) || 60,
+        group: parseInt(document.getElementById('f-group').value) || 1
+    };
+}
+
+// ── Save ───────────────────────────────────────────────────
+async function saveTarget() {
+    const body = buildTargetJson();
+    if (!body) return;
+
+    try {
+        let resp;
+        if (isNewTarget) {
+            resp = await fetch('/api/targets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+        } else {
+            resp = await fetch('/api/targets/' + encodeURIComponent(selectedName), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+        }
+
+        if (resp.ok || resp.status === 201) {
+            showToast('Target "' + body.name + '" saved successfully', 'success');
+            selectedName = body.name;
+            isNewTarget = false;
+
+            // Make name read-only
+            const nameInput = document.getElementById('f-name');
+            nameInput.readOnly = true;
+            nameInput.classList.add('opacity-60');
+
+            await fetchTargets();
+            fetchDdlPreview(body.name);
+        } else {
+            const err = await resp.text();
+            showToast('Save failed: ' + (err || resp.status), 'error');
+        }
+    } catch (e) {
+        showToast('Save failed: ' + e.message, 'error');
+    }
+}
+
+// ── Delete ─────────────────────────────────────────────────
+function deleteTarget(name) {
+    showConfirm(
+        'Delete Target',
+        `Are you sure you want to delete "${name}"? This action cannot be undone.`,
+        `<label class="flex items-center gap-2 text-sm text-on-surface-variant">
+            <input type="checkbox" id="drop-tables-check" class="rounded text-primary focus:ring-primary/20 border-outline-variant/30" checked/>
+            Drop staging & target tables
+        </label>
+        <label class="flex items-center gap-2 text-sm text-on-surface-variant">
+            <input type="checkbox" id="drop-wm-check" class="rounded text-primary focus:ring-primary/20 border-outline-variant/30" checked/>
+            Remove watermark record
+        </label>`,
+        async () => {
+            const dropTables = document.getElementById('drop-tables-check')?.checked ?? true;
+            const dropWm = document.getElementById('drop-wm-check')?.checked ?? true;
+            try {
+                const resp = await fetch(
+                    '/api/targets/' + encodeURIComponent(name) + '?dropTables=' + dropTables + '&dropWatermark=' + dropWm,
+                    { method: 'DELETE' }
+                );
+                if (resp.ok) {
+                    showToast('Target "' + name + '" deleted', 'success');
+                    if (selectedName === name) {
+                        selectedName = null;
+                        isNewTarget = false;
+                        document.getElementById('editor-empty').classList.remove('hidden');
+                        document.getElementById('editor-form').classList.add('hidden');
+                        document.getElementById('action-bar').classList.add('hidden');
+                    }
+                    await fetchTargets();
+                } else {
+                    const err = await resp.text();
+                    showToast('Delete failed: ' + (err || resp.status), 'error');
+                }
+            } catch (e) {
+                showToast('Delete failed: ' + e.message, 'error');
+            }
+        }
+    );
+}
+
+// ── Execute DDL ────────────────────────────────────────────
+async function executeDdl() {
+    const name = selectedName || document.getElementById('f-name').value.trim();
+    if (!name || isNewTarget) {
+        showToast('Save the target first before executing DDL', 'error');
+        return;
+    }
+
+    try {
+        // Send client-generated DDL in body
+        const stagingTable = document.getElementById('f-staging').value;
+        const targetTable = document.getElementById('f-target').value;
+        const ddlBody = {
+            stagingDdl: generateDdl(stagingTable, false),
+            targetDdl: generateDdl(targetTable, true)
+        };
+        const resp = await fetch('/api/targets/' + encodeURIComponent(name) + '/ddl/execute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(ddlBody)
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            showToast(data.message || 'DDL executed successfully', 'success');
+            fetchDdlPreview(name);
+        } else {
+            const err = await resp.text();
+            showToast('DDL execution failed: ' + (err || resp.status), 'error');
+        }
+    } catch (e) {
+        showToast('DDL execution failed: ' + e.message, 'error');
+    }
+}
+
+// ── Save & Execute DDL ─────────────────────────────────────
+async function saveAndExecuteDdl() {
+    const body = buildTargetJson();
+    if (!body) return;
+
+    // Save first
+    try {
+        let resp;
+        if (isNewTarget) {
+            resp = await fetch('/api/targets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+        } else {
+            resp = await fetch('/api/targets/' + encodeURIComponent(selectedName), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+        }
+
+        if (resp.ok || resp.status === 201) {
+            showToast('Target saved', 'success');
+            selectedName = body.name;
+            isNewTarget = false;
+
+            const nameInput = document.getElementById('f-name');
+            nameInput.readOnly = true;
+            nameInput.classList.add('opacity-60');
+
+            await fetchTargets();
+
+            // Now execute DDL
+            await executeDdl();
+        } else {
+            const err = await resp.text();
+            showToast('Save failed: ' + (err || resp.status), 'error');
+        }
+    } catch (e) {
+        showToast('Save failed: ' + e.message, 'error');
+    }
+}
+
+// ── Init ───────────────────────────────────────────────────
+(async function init() {
+    await fetchTargets();
+})();
+</script>
+</body></html>

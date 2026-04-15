@@ -7,14 +7,12 @@ import java.sql.Connection
 
 object OracleDs {
     private val log = LoggerFactory.getLogger(OracleDs::class.java)
-    private val pool: PoolDataSource
-
-    init {
+    private val pool: PoolDataSource by lazy {
         val walletPath = System.getenv("TNS_ADMIN")
         if (walletPath != null) {
             System.setProperty("oracle.net.tns_admin", walletPath)
         }
-        pool = PoolDataSourceFactory.getPoolDataSource().apply {
+        PoolDataSourceFactory.getPoolDataSource().apply {
             connectionFactoryClassName = "oracle.jdbc.pool.OracleDataSource"
             val connectString = System.getenv("DB_CONNECT_STRING") ?: error("DB_CONNECT_STRING not set")
             url = if (walletPath != null)
@@ -27,8 +25,7 @@ object OracleDs {
             initialPoolSize = 2
             minPoolSize = 2
             maxPoolSize = 10
-        }
-        log.info("UCP pool created, url={}", pool.url)
+        }.also { log.info("UCP pool created, url={}", it.url) }
     }
 
     fun getConnection(): Connection = pool.connection

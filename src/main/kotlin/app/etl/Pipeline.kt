@@ -39,24 +39,26 @@ class Pipeline(private val cfg: PipelineConfig) {
         }
     }
 
-    fun run() {
+    fun run() = runTargets(cfg.targets)
+
+    fun runTargets(targets: List<TargetConfig>) {
         var seqId = Int.MIN_VALUE
-        val groups = cfg.targets
+        val groups = targets
             .map { it to (it.group ?: seqId--) }
             .groupBy({ it.second }, { it.first })
             .toSortedMap()
 
-        for ((groupId, targets) in groups) {
-            if (targets.size == 1) {
-                runTarget(targets[0])
+        for ((groupId, grpTargets) in groups) {
+            if (grpTargets.size == 1) {
+                runTarget(grpTargets[0])
             } else {
                 MDC.put("group", groupId.toString())
-                log.info("Group {}: running {} in parallel", groupId, targets.map { it.name })
+                log.info("Group {}: running {} in parallel", groupId, grpTargets.map { it.name })
                 log.info("Group {}: connecting to source (single SSO)", groupId)
                 SourceConnHolder(SourceDs.getConnection()).use { holder ->
                     log.info("Group {}: source connected", groupId)
-                    val pool = Executors.newFixedThreadPool(targets.size)
-                    val futures = targets.map { target ->
+                    val pool = Executors.newFixedThreadPool(grpTargets.size)
+                    val futures = grpTargets.map { target ->
                         pool.submit<Unit> {
                             MDC.put("group", groupId.toString())
                             runTarget(target, holder)

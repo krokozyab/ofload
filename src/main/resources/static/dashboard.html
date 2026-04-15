@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>ETL Manager | ckh_dw Service</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "error": "#ba1a1a",
+            "surface-container-lowest": "#ffffff",
+            "secondary-container": "#a0ecf7",
+            "on-surface-variant": "#59413d",
+            "outline": "#8c716c",
+            "on-secondary-container": "#126d77",
+            "tertiary-fixed-dim": "#ffb68f",
+            "on-background": "#1b1c1c",
+            "surface-tint": "#ac3323",
+            "primary-fixed-dim": "#ffb4a7",
+            "on-primary-fixed-variant": "#8b1a0e",
+            "surface-dim": "#dbd9d9",
+            "on-primary-container": "#fff6f5",
+            "primary-container": "#c74634",
+            "on-surface": "#1b1c1c",
+            "surface-container-low": "#f5f3f3",
+            "on-error-container": "#93000a",
+            "surface-container-highest": "#e4e2e2",
+            "on-tertiary-fixed-variant": "#773200",
+            "on-tertiary-fixed": "#331100",
+            "secondary-fixed": "#a3effa",
+            "background": "#fbf9f8",
+            "on-tertiary": "#ffffff",
+            "surface-container-high": "#eae8e7",
+            "on-secondary-fixed-variant": "#004f57",
+            "on-secondary": "#ffffff",
+            "on-primary-fixed": "#400100",
+            "tertiary-container": "#ba5409",
+            "error-container": "#ffdad6",
+            "inverse-on-surface": "#f2f0f0",
+            "primary-fixed": "#ffdad4",
+            "primary": "#a52e1f",
+            "secondary": "#076872",
+            "secondary-fixed-dim": "#87d2de",
+            "outline-variant": "#e0bfba",
+            "surface-variant": "#e4e2e2",
+            "tertiary": "#954000",
+            "surface-container": "#f0eded",
+            "surface-bright": "#fbf9f8",
+            "on-tertiary-container": "#fff7f4",
+            "on-error": "#ffffff",
+            "on-secondary-fixed": "#001f23",
+            "inverse-primary": "#ffb4a7",
+            "inverse-surface": "#303030",
+            "tertiary-fixed": "#ffdbca",
+            "on-primary": "#ffffff",
+            "surface": "#fbf9f8"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.125rem",
+            "lg": "0.25rem",
+            "xl": "0.5rem",
+            "full": "0.75rem"
+          },
+          "fontFamily": {
+            "headline": ["Manrope"],
+            "body": ["Inter"],
+            "label": ["Inter"]
+          }
+        },
+      },
+    }
+</script>
+<style>
+    .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+    body { font-family: 'Inter', sans-serif; }
+    .font-headline { font-family: 'Manrope', sans-serif; }
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: #f5f3f3; }
+    ::-webkit-scrollbar-thumb { background: #e0bfba; border-radius: 4px; }
+    .no-border-shadow { box-shadow: 0 12px 32px -4px rgba(140, 113, 108, 0.12); }
+
+    #toast-container {
+        position: fixed;
+        top: 1rem;
+        right: 1rem;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    .toast {
+        padding: 0.75rem 1.25rem;
+        border-radius: 0.5rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #fff;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        animation: slideIn 0.3s ease-out;
+        max-width: 360px;
+    }
+    .toast-success { background: #076872; }
+    .toast-error { background: #ba1a1a; }
+    .toast-info { background: #59413d; }
+    @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes slideOut {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
+    }
+</style>
+</head>
+<body class="bg-background text-on-background min-h-screen">
+
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
+<!-- Sidebar -->
+<aside class="flex flex-col fixed left-0 top-0 h-full py-6 px-4 z-50 bg-[#f5f3f3] dark:bg-stone-900 h-screen w-64 border-none shadow-[0_4px_20px_-4px_rgba(140,113,108,0.08)]">
+    <div class="mb-8 px-2">
+        <h1 class="font-['Manrope'] font-bold text-[#a52e1f] text-xl">ETL Manager</h1>
+        <p class="text-on-surface-variant text-xs opacity-70">Instance: Production</p>
+    </div>
+    <nav class="flex-1 flex flex-col gap-1">
+        <a class="flex items-center gap-3 px-4 py-3 bg-[#ffffff] dark:bg-stone-800 text-[#a52e1f] dark:text-[#c74634] font-bold rounded-lg shadow-sm" href="/">
+            <span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+            <span class="font-['Inter'] text-sm">Dashboard</span>
+        </a>
+        <a class="flex items-center gap-3 px-4 py-3 text-[#59413d] dark:text-stone-400 hover:text-[#a52e1f] hover:bg-[#e4e2e2] dark:hover:bg-stone-800 transition-all duration-200 rounded-lg" href="/targets">
+            <span class="material-symbols-outlined" data-icon="target">target</span>
+            <span class="font-['Inter'] text-sm">Targets</span>
+        </a>
+    </nav>
+</aside>
+
+<!-- Main Canvas -->
+<main class="ml-64 flex flex-col min-h-screen">
+    <!-- Header -->
+    <header class="flex justify-between items-center px-8 h-16 w-full z-40 bg-[#fbf9f8] dark:bg-stone-950 sticky top-0 shadow-sm">
+        <div class="flex items-center gap-4">
+            <div class="text-lg font-['Manrope'] font-bold text-[#a52e1f] dark:text-[#c74634]">ckh_dw Service</div>
+            <div class="h-4 w-px bg-outline-variant opacity-30"></div>
+            <div id="health-indicator" class="flex items-center gap-2 px-3 py-1 bg-surface-container-low rounded-full">
+                <span id="health-dot" class="w-2 h-2 rounded-full bg-gray-400"></span>
+                <span id="health-text" class="text-xs font-medium text-on-surface-variant">Checking...</span>
+            </div>
+        </div>
+        <div class="flex items-center gap-6">
+            <div class="flex items-center gap-3 bg-surface-container-high rounded-lg p-1">
+                <span class="text-[10px] uppercase tracking-wider font-bold text-on-surface-variant px-2">Auto-refresh</span>
+                <div class="flex" id="refresh-buttons">
+                    <button data-interval="0" class="refresh-btn px-3 py-1 text-xs font-semibold bg-surface-container-lowest text-primary rounded-md shadow-sm">Off</button>
+                    <button data-interval="15" class="refresh-btn px-3 py-1 text-xs font-medium text-on-surface-variant hover:text-primary">15s</button>
+                    <button data-interval="30" class="refresh-btn px-3 py-1 text-xs font-medium text-on-surface-variant hover:text-primary">30s</button>
+                    <button data-interval="60" class="refresh-btn px-3 py-1 text-xs font-medium text-on-surface-variant hover:text-primary">60s</button>
+                </div>
+            </div>
+            <div class="flex items-center gap-4 text-on-surface-variant">
+                <button class="material-symbols-outlined hover:text-primary transition-colors" data-icon="check_circle" onclick="refreshAll()" title="Refresh now">check_circle</button>
+                <button class="material-symbols-outlined hover:text-primary transition-colors" data-icon="settings">settings</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Content Area -->
+    <div class="p-8 max-w-7xl w-full mx-auto flex flex-col gap-10">
+        <!-- Breadcrumbs -->
+        <nav class="flex items-center gap-2 text-sm text-on-surface-variant mb-[-24px]">
+            <span class="opacity-60">Services</span>
+            <span class="material-symbols-outlined text-sm" data-icon="chevron_right">chevron_right</span>
+            <span class="font-semibold text-primary">ckh_dw Dashboard</span>
+        </nav>
+
+        <!-- Section 1: Groups Overview -->
+        <section>
+            <div class="flex justify-between items-end mb-6">
+                <div>
+                    <h2 class="text-3xl font-['Manrope'] font-extrabold text-on-surface tracking-tight">Groups Overview</h2>
+                    <p class="text-on-surface-variant opacity-70">Monitor and execute logical pipeline clusters.</p>
+                </div>
+                <button onclick="runAll()" class="bg-gradient-to-br from-secondary to-secondary-container text-on-secondary px-6 py-2.5 rounded-lg font-bold flex items-center gap-2 shadow-md active:scale-95 transition-all">
+                    <span class="material-symbols-outlined" data-icon="play_arrow">play_arrow</span>
+                    Run All Groups
+                </button>
+            </div>
+            <div id="groups-container" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Dynamically populated -->
+            </div>
+        </section>
+
+        <!-- Section 2: Targets Table -->
+        <section class="flex flex-col gap-6">
+            <div class="flex items-end justify-between">
+                <div>
+                    <h2 class="text-2xl font-['Manrope'] font-bold text-on-surface">Targets Pipeline</h2>
+                    <p class="text-on-surface-variant opacity-70">Granular view of all data synchronization targets.</p>
+                </div>
+                <div class="flex gap-2">
+                    <div class="relative">
+                        <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant opacity-60" data-icon="search">search</span>
+                        <input id="filter-input" class="bg-surface-container-high border-none rounded-lg pl-10 pr-4 py-2 text-sm focus:ring-2 focus:ring-primary/20 w-64" placeholder="Filter targets..." type="text"/>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-surface-container-lowest rounded-xl no-border-shadow overflow-hidden">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-surface-container-low text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
+                            <th class="px-6 py-4">Target</th>
+                            <th class="px-4 py-4">Group</th>
+                            <th class="px-4 py-4">Status</th>
+                            <th class="px-4 py-4 text-right">Rows Loaded</th>
+                            <th class="px-4 py-4">Last WM</th>
+                            <th class="px-4 py-4">Duration</th>
+                            <th class="px-4 py-4">Last Run</th>
+                            <th class="px-6 py-4 text-center">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="targets-tbody" class="divide-y divide-surface-container-low text-sm">
+                        <!-- Dynamically populated -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <!-- Footer -->
+    <footer class="mt-auto py-6 px-8 border-t border-surface-container-low text-on-surface-variant text-xs flex justify-between items-center opacity-60">
+        <div>ckh_dw ETL Service</div>
+        <div class="flex gap-4">
+            <a class="hover:underline" href="#">Documentation</a>
+            <a class="hover:underline" href="#">API Reference</a>
+        </div>
+    </footer>
+</main>
+
+<script>
+// ── State ──────────────────────────────────────────────────
+let autoRefreshTimer = null;
+let configData = {};  // name -> { group, ... }
+let statusData = [];  // array of target status objects
+
+// ── Toast ──────────────────────────────────────────────────
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease-in forwards';
+        setTimeout(() => toast.remove(), 300);
+    }, 5000);
+}
+
+// ── Formatters ─────────────────────────────────────────────
+function formatNumber(n) {
+    if (n == null) return '0';
+    return Number(n).toLocaleString('en-US');
+}
+
+function parseTs(s) {
+    if (!s) return NaN;
+    // "2026-04-12 16:11:22.479602" → parse as UTC (Oracle SYSTIMESTAMP is in DB timezone = UTC)
+    const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/);
+    if (!m) return NaN;
+    const ms = m[7] ? parseInt(m[7].substring(0, 3).padEnd(3, '0')) : 0;
+    return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6], ms);
+}
+
+function relativeTime(isoStr) {
+    if (!isoStr) return '-';
+    const now = Date.now();
+    const then = parseTs(isoStr);
+    if (isNaN(then)) return isoStr;
+    const diffMs = now - then;
+    if (diffMs < 0) return 'just now';
+    const secs = Math.floor(diffMs / 1000);
+    if (secs < 60) return secs + 's ago';
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return mins + 'm ago';
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + 'h ago';
+    const days = Math.floor(hrs / 24);
+    return days + 'd ago';
+}
+
+function calcDuration(started, finished) {
+    if (!started) return '-';
+    const s = parseTs(started);
+    const f = finished ? parseTs(finished) : Date.now();
+    if (isNaN(s)) return '-';
+    const diffSec = Math.max(0, Math.floor((f - s) / 1000));
+    const m = Math.floor(diffSec / 60);
+    const sec = diffSec % 60;
+    const suffix = finished ? '' : '...';
+    return m + 'm ' + String(sec).padStart(2, '0') + 's' + suffix;
+}
+
+// ── API calls ──────────────────────────────────────────────
+async function fetchHealth() {
+    try {
+        const resp = await fetch('/health');
+        const data = await resp.json();
+        const dot = document.getElementById('health-dot');
+        const text = document.getElementById('health-text');
+        if (data.status === 'ok') {
+            dot.className = 'w-2 h-2 rounded-full bg-green-500';
+            text.textContent = 'Connected';
+        } else {
+            dot.className = 'w-2 h-2 rounded-full bg-red-500';
+            text.textContent = data.error ? 'Degraded: ' + data.error : 'Degraded';
+        }
+    } catch (e) {
+        const dot = document.getElementById('health-dot');
+        const text = document.getElementById('health-text');
+        dot.className = 'w-2 h-2 rounded-full bg-red-500';
+        text.textContent = 'Disconnected';
+    }
+}
+
+async function fetchConfig() {
+    try {
+        const resp = await fetch('/config');
+        const data = await resp.json();
+        configData = {};
+        (data.targets || []).forEach(t => {
+            configData[t.name] = t;
+        });
+    } catch (e) {
+        // Config endpoint might not exist yet; fall back silently
+    }
+}
+
+async function fetchStatus() {
+    try {
+        const resp = await fetch('/status');
+        const data = await resp.json();
+        const statusTargets = data.targets || [];
+
+        // Merge with config: ensure all config targets appear even without watermark
+        const statusByName = {};
+        statusTargets.forEach(t => { statusByName[t.name] = t; });
+
+        statusData = [];
+        const seen = new Set();
+        // First add all status targets
+        statusTargets.forEach(t => { statusData.push(t); seen.add(t.name); });
+        // Then add config-only targets (newly created, never run)
+        Object.keys(configData).forEach(name => {
+            if (!seen.has(name)) {
+                statusData.push({ name: name, running: false, watermark: null });
+            }
+        });
+
+        renderGroups();
+        renderTargets();
+    } catch (e) {
+        showToast('Failed to fetch status: ' + e.message, 'error');
+    }
+}
+
+// ── Render Groups ──────────────────────────────────────────
+function renderGroups() {
+    const container = document.getElementById('groups-container');
+    // Build group map: groupId -> [targets]
+    const groups = {};
+    statusData.forEach(t => {
+        const cfg = configData[t.name];
+        const groupId = cfg ? cfg.group : 0;
+        if (!groups[groupId]) groups[groupId] = [];
+        groups[groupId].push(t);
+    });
+
+    const sortedKeys = Object.keys(groups).map(Number).sort((a, b) => a - b);
+    container.innerHTML = sortedKeys.map(gid => {
+        const targets = groups[gid];
+        const label = gid === 0 ? 'Ungrouped' : 'Group ' + gid;
+
+        // Determine aggregate status
+        const anyRunning = targets.some(t => t.running || (t.watermark && t.watermark.lastStatus === 'RUNNING'));
+        const anyFailed = targets.some(t => t.watermark && t.watermark.lastStatus === 'FAILED');
+        let statusLabel, statusClasses, dotClasses, borderColor;
+        if (anyRunning) {
+            statusLabel = 'Running';
+            statusClasses = 'bg-secondary-container text-on-secondary-container';
+            dotClasses = 'w-1.5 h-1.5 rounded-full bg-secondary animate-pulse';
+            borderColor = 'border-secondary';
+        } else if (anyFailed) {
+            statusLabel = 'Failed';
+            statusClasses = 'bg-error-container text-on-error-container';
+            dotClasses = 'w-1.5 h-1.5 rounded-full bg-error';
+            borderColor = 'border-error';
+        } else {
+            statusLabel = 'OK';
+            statusClasses = 'bg-green-100 text-green-700';
+            dotClasses = 'w-1.5 h-1.5 rounded-full bg-green-600';
+            borderColor = 'border-green-500';
+        }
+
+        // Most recent finish time for "Last run"
+        let latestFinish = null;
+        let latestFinishStr = null;
+        targets.forEach(t => {
+            const f = t.watermark && t.watermark.lastRunFinished;
+            if (f) {
+                const d = parseTs(f);
+                if (!isNaN(d) && (latestFinish === null || d > latestFinish)) {
+                    latestFinish = d;
+                    latestFinishStr = f;
+                }
+            }
+        });
+        const lastRunStr = latestFinishStr ? relativeTime(latestFinishStr) : '-';
+
+        // Footer action
+        let footerLeft, footerRight;
+        if (anyRunning) {
+            footerLeft = `<span class="text-xs text-on-surface-variant">In progress...</span>`;
+            footerRight = `<span class="text-on-surface-variant font-bold text-sm flex items-center gap-1 opacity-50 cursor-not-allowed">
+                <span class="material-symbols-outlined text-sm">hourglass_top</span> Running
+            </span>`;
+        } else if (anyFailed) {
+            footerLeft = `<span class="text-xs text-error font-medium">Failed ${lastRunStr}</span>`;
+            footerRight = `<button onclick="runGroup(${gid})" class="text-primary font-bold text-sm flex items-center gap-1 hover:underline">
+                <span class="material-symbols-outlined text-sm">refresh</span> Retry Group
+            </button>`;
+        } else {
+            footerLeft = `<span class="text-xs text-on-surface-variant">Last run: ${lastRunStr}</span>`;
+            footerRight = `<button onclick="runGroup(${gid})" class="text-secondary font-bold text-sm flex items-center gap-1 hover:underline">
+                <span class="material-symbols-outlined text-sm">play_circle</span> Run Group
+            </button>`;
+        }
+
+        return `
+        <div class="bg-surface-container-lowest p-6 rounded-xl no-border-shadow flex flex-col gap-4 border-l-4 ${borderColor} hover:translate-y-[-2px] transition-transform">
+            <div class="flex justify-between items-start">
+                <div>
+                    <span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant opacity-60">Identifier</span>
+                    <h3 class="text-xl font-bold text-on-surface">${label}</h3>
+                </div>
+                <span class="px-2.5 py-1 ${statusClasses} text-xs font-bold rounded-full flex items-center gap-1">
+                    <span class="${dotClasses}"></span>
+                    ${statusLabel}
+                </span>
+            </div>
+            <div class="flex items-center gap-2 text-on-surface-variant text-sm">
+                <span class="material-symbols-outlined text-sm">layers</span>
+                ${targets.length} target${targets.length !== 1 ? 's' : ''} configured
+            </div>
+            <div class="mt-2 pt-4 border-t border-surface-container-low flex justify-between items-center">
+                ${footerLeft}
+                ${footerRight}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ── Render Targets Table ───────────────────────────────────
+function renderTargets() {
+    const tbody = document.getElementById('targets-tbody');
+    const filter = (document.getElementById('filter-input').value || '').toLowerCase();
+
+    const filtered = statusData.filter(t => t.name.toLowerCase().includes(filter));
+
+    tbody.innerHTML = filtered.map(t => {
+        const wm = t.watermark || {};
+        const cfg = configData[t.name];
+        const groupId = cfg ? cfg.group : 0;
+        const groupLabel = groupId === 0 ? 'Ungrouped' : 'Group ' + groupId;
+
+        const isRunning = t.running || wm.lastStatus === 'RUNNING';
+        const isFailed = wm.lastStatus === 'FAILED';
+
+        // Status badge
+        let statusBadge;
+        if (isRunning) {
+            statusBadge = `<span class="px-2 py-1 bg-secondary-container text-on-secondary-container text-[11px] font-bold rounded-full flex items-center gap-1 w-fit">
+                <span class="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse"></span> RUNNING
+            </span>`;
+        } else if (isFailed) {
+            statusBadge = `<span class="px-2 py-1 bg-error-container text-on-error-container text-[11px] font-bold rounded-full">FAILED</span>`;
+        } else {
+            statusBadge = `<span class="px-2 py-1 bg-green-50 text-green-700 text-[11px] font-bold rounded-full">${wm.lastStatus || 'NEW'}</span>`;
+        }
+
+        // Error icon
+        const errorIcon = isFailed && wm.errorMessage
+            ? ` <span class="material-symbols-outlined text-error text-base cursor-help" title="${wm.errorMessage.replace(/"/g, '&quot;')}">error</span>`
+            : '';
+
+        // Row classes
+        const rowClass = isFailed
+            ? 'bg-error/5 hover:bg-error/10 transition-colors group'
+            : 'hover:bg-surface-container-low transition-colors group';
+
+        // Action button
+        let actionBtn;
+        if (isRunning) {
+            actionBtn = `<button disabled class="bg-on-surface-variant/10 text-on-surface-variant px-3 py-1.5 rounded-lg text-xs font-bold opacity-50 cursor-not-allowed">Running</button>`;
+        } else if (isFailed) {
+            actionBtn = `<button onclick="runTarget('${t.name}')" class="bg-primary text-on-primary px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm hover:scale-105 transition-all">Retry</button>`;
+        } else {
+            actionBtn = `<button onclick="runTarget('${t.name}')" class="bg-secondary/10 text-secondary px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-secondary hover:text-white transition-all">Run</button>`;
+        }
+
+        // Duration
+        const duration = calcDuration(wm.lastRunStarted, wm.lastRunFinished);
+        // Last run relative
+        const lastRunRel = isRunning ? 'Now' : relativeTime(wm.lastRunFinished);
+        // Last watermark
+        const lastWm = wm.lastWm || '-';
+
+        return `<tr class="${rowClass}">
+            <td class="px-6 py-5 font-semibold text-on-surface">${t.name}${errorIcon}</td>
+            <td class="px-4 py-5">
+                <span class="bg-surface-container-high px-2 py-0.5 rounded text-[10px] font-bold text-on-surface-variant">${groupLabel}</span>
+            </td>
+            <td class="px-4 py-5">${statusBadge}</td>
+            <td class="px-4 py-5 text-right font-mono text-xs">${formatNumber(wm.rowsLoaded)}</td>
+            <td class="px-4 py-5 text-on-surface-variant text-xs">${lastWm}</td>
+            <td class="px-4 py-5 text-on-surface-variant">${duration}</td>
+            <td class="px-4 py-5 text-on-surface-variant italic">${lastRunRel}</td>
+            <td class="px-6 py-5 text-center">${actionBtn}</td>
+        </tr>`;
+    }).join('');
+}
+
+// ── Actions ────────────────────────────────────────────────
+async function runAll() {
+    try {
+        const resp = await fetch('/run', { method: 'POST' });
+        if (resp.status === 202 || resp.ok) {
+            const data = await resp.json();
+            showToast(data.message || 'Run triggered for all targets', 'success');
+            setTimeout(refreshAll, 1000);
+        } else {
+            showToast('Run failed: HTTP ' + resp.status, 'error');
+        }
+    } catch (e) {
+        showToast('Run failed: ' + e.message, 'error');
+    }
+}
+
+async function runGroup(groupId) {
+    try {
+        const resp = await fetch('/run/group/' + groupId, { method: 'POST' });
+        if (resp.status === 202 || resp.ok) {
+            const data = await resp.json();
+            showToast(data.message || 'Group ' + groupId + ' triggered', 'success');
+            setTimeout(refreshAll, 1000);
+        } else {
+            showToast('Run group failed: HTTP ' + resp.status, 'error');
+        }
+    } catch (e) {
+        showToast('Run group failed: ' + e.message, 'error');
+    }
+}
+
+async function runTarget(name) {
+    try {
+        const resp = await fetch('/run/target/' + encodeURIComponent(name), { method: 'POST' });
+        if (resp.status === 202 || resp.ok) {
+            const data = await resp.json();
+            showToast(data.message || 'Target ' + name + ' triggered', 'success');
+            setTimeout(refreshAll, 1000);
+        } else {
+            showToast('Run target failed: HTTP ' + resp.status, 'error');
+        }
+    } catch (e) {
+        showToast('Run target failed: ' + e.message, 'error');
+    }
+}
+
+// ── Refresh ────────────────────────────────────────────────
+async function refreshAll() {
+    await Promise.all([fetchHealth(), fetchStatus()]);
+}
+
+// ── Auto-refresh toggle ────────────────────────────────────
+document.querySelectorAll('.refresh-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        // Update active button styles
+        document.querySelectorAll('.refresh-btn').forEach(b => {
+            b.className = 'refresh-btn px-3 py-1 text-xs font-medium text-on-surface-variant hover:text-primary';
+        });
+        btn.className = 'refresh-btn px-3 py-1 text-xs font-semibold bg-surface-container-lowest text-primary rounded-md shadow-sm';
+
+        // Clear existing timer
+        if (autoRefreshTimer) {
+            clearInterval(autoRefreshTimer);
+            autoRefreshTimer = null;
+        }
+
+        const interval = parseInt(btn.dataset.interval, 10);
+        if (interval > 0) {
+            autoRefreshTimer = setInterval(refreshAll, interval * 1000);
+            showToast('Auto-refresh set to ' + interval + 's', 'info');
+        }
+    });
+});
+
+// ── Filter input ───────────────────────────────────────────
+document.getElementById('filter-input').addEventListener('input', () => {
+    renderTargets();
+});
+
+// ── Init ───────────────────────────────────────────────────
+(async function init() {
+    await fetchConfig();
+    await refreshAll();
+})();
+</script>
+</body>
+</html>
