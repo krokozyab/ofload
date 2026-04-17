@@ -3,12 +3,10 @@ package app.server
 import app.config.PipelineConfig
 import app.config.TargetConfig
 import app.db.OracleDs
-import app.etl.WatermarkStore
 import io.javalin.Javalin
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
-import java.io.File
 
 private val log = LoggerFactory.getLogger("app.server.TargetsApi")
 private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
@@ -21,12 +19,9 @@ data class DdlResponse(
     val targetTableExists: Boolean
 )
 
-@Serializable
-data class MessageResponse(val message: String)
-
 fun configureTargetsApi(app: Javalin, configHolder: ConfigHolder) {
 
-    // GET /api/targets — list all targets
+    // GET /api/targets — list all targets (read-only view of targets.json)
     app.get("/api/targets") { ctx ->
         ctx.status(200).result(json.encodeToString(PipelineConfig.serializer(), configHolder.config))
     }
@@ -42,85 +37,7 @@ fun configureTargetsApi(app: Javalin, configHolder: ConfigHolder) {
         }
     }
 
-    // POST /api/targets — create new target
-    app.post("/api/targets") { ctx ->
-        val target = json.decodeFromString(TargetConfig.serializer(), ctx.body())
-        if (configHolder.config.targets.any { it.name == target.name }) {
-            ctx.status(409).result(json.encodeToString(ErrorResponse.serializer(), ErrorResponse("Target '${target.name}' already exists")))
-            return@post
-        }
-        val newConfig = PipelineConfig(configHolder.config.targets + target)
-        configHolder.saveConfig(newConfig)
-        log.info("Target created: {}", target.name)
-        ctx.status(201).result(json.encodeToString(TargetConfig.serializer(), target))
-    }
-
-    // PUT /api/targets/{name} — update target
-    app.put("/api/targets/{name}") { ctx ->
-        val name = ctx.pathParam("name")
-        val target = json.decodeFromString(TargetConfig.serializer(), ctx.body())
-        val existing = configHolder.config.targets.find { it.name == name }
-        if (existing == null) {
-            ctx.status(404).result(json.encodeToString(ErrorResponse.serializer(), ErrorResponse("Target '$name' not found")))
-            return@put
-        }
-        val newTargets = configHolder.config.targets.map { if (it.name == name) target else it }
-        configHolder.saveConfig(PipelineConfig(newTargets))
-        log.info("Target updated: {}", name)
-        ctx.status(200).result(json.encodeToString(TargetConfig.serializer(), target))
-    }
-
-    // DELETE /api/targets/{name}
-    app.delete("/api/targets/{name}") { ctx ->
-        val name = ctx.pathParam("name")
-        val target = configHolder.config.targets.find { it.name == name }
-        if (target == null) {
-            ctx.status(404).result(json.encodeToString(ErrorResponse.serializer(), ErrorResponse("Target '$name' not found")))
-            return@delete
-        }
-
-        val dropTables = ctx.queryParam("dropTables")?.toBoolean() ?: false
-        val dropWatermark = ctx.queryParam("dropWatermark")?.toBoolean() ?: false
-
-        if (dropTables) {
-            try {
-                OracleDs.getConnection().use { conn ->
-                    conn.createStatement().use { st ->
-                        runCatching { st.execute("DROP TABLE ${target.stagingTable}") }
-                            .onSuccess { log.info("Dropped {}", target.stagingTable) }
-                            .onFailure { log.warn("Drop {} failed: {}", target.stagingTable, it.message) }
-                        runCatching { st.execute("DROP TABLE ${target.targetTable}") }
-                            .onSuccess { log.info("Dropped {}", target.targetTable) }
-                            .onFailure { log.warn("Drop {} failed: {}", target.targetTable, it.message) }
-                    }
-                }
-            } catch (e: Exception) {
-                log.error("Failed to drop tables for {}: {}", name, e.message)
-            }
-        }
-
-        if (dropWatermark) {
-            try {
-                OracleDs.getConnection().use { conn ->
-                    conn.prepareStatement("DELETE FROM ETL_WATERMARK WHERE TARGET_NAME = ?").use { ps ->
-                        ps.setString(1, name)
-                        ps.executeUpdate()
-                    }
-                    conn.commit()
-                    log.info("Deleted watermark for {}", name)
-                }
-            } catch (e: Exception) {
-                log.error("Failed to delete watermark for {}: {}", name, e.message)
-            }
-        }
-
-        val newConfig = PipelineConfig(configHolder.config.targets.filter { it.name != name })
-        configHolder.saveConfig(newConfig)
-        log.info("Target deleted: {}", name)
-        ctx.status(200).result(json.encodeToString(MessageResponse.serializer(), MessageResponse("Target '$name' deleted")))
-    }
-
-    // GET /api/targets/{name}/ddl — generate DDL
+    // GET /api/targets/{name}/ddl — read-only DDL inspection from DB metadata
     app.get("/api/targets/{name}/ddl") { ctx ->
         val name = ctx.pathParam("name")
         val target = configHolder.config.targets.find { it.name == name }
@@ -129,7 +46,6 @@ fun configureTargetsApi(app: Javalin, configHolder: ConfigHolder) {
             return@get
         }
 
-        // Check if tables exist
         var stagingExists = false
         var targetExists = false
         try {
@@ -141,7 +57,6 @@ fun configureTargetsApi(app: Javalin, configHolder: ConfigHolder) {
             log.warn("Failed to check table existence: {}", e.message)
         }
 
-        // Generate DDL from DB metadata
         var stagingDdl = "-- Table ${target.stagingTable} does not exist"
         var targetDdl = "-- Table ${target.targetTable} does not exist"
         try {
@@ -156,55 +71,7 @@ fun configureTargetsApi(app: Javalin, configHolder: ConfigHolder) {
         ctx.status(200).result(json.encodeToString(DdlResponse.serializer(),
             DdlResponse(stagingDdl, targetDdl, stagingExists, targetExists)))
     }
-
-    // POST /api/targets/{name}/ddl/execute — execute DDL
-    app.post("/api/targets/{name}/ddl/execute") { ctx ->
-        val name = ctx.pathParam("name")
-        val target = configHolder.config.targets.find { it.name == name }
-        if (target == null) {
-            ctx.status(404).result(json.encodeToString(ErrorResponse.serializer(), ErrorResponse("Target '$name' not found")))
-            return@post
-        }
-
-        // Accept DDL from request body or generate from files
-        val body = if (ctx.body().isNotBlank()) {
-            try { json.decodeFromString(DdlExecuteRequest.serializer(), ctx.body()) } catch (e: Exception) { null }
-        } else null
-
-        val stagingDdl = body?.stagingDdl
-        val targetDdl = body?.targetDdl
-
-        val results = mutableListOf<String>()
-        try {
-            OracleDs.getConnection().use { conn ->
-                conn.createStatement().use { st ->
-                    if (stagingDdl != null) {
-                        st.execute(stagingDdl)
-                        results.add("${target.stagingTable} created")
-                        log.info("DDL executed: {} created", target.stagingTable)
-                    }
-                    if (targetDdl != null) {
-                        st.execute(targetDdl)
-                        results.add("${target.targetTable} created")
-                        log.info("DDL executed: {} created", target.targetTable)
-                    }
-                }
-            }
-            ctx.status(200).result(json.encodeToString(MessageResponse.serializer(),
-                MessageResponse(results.joinToString(", "))))
-        } catch (e: Exception) {
-            log.error("DDL execution failed for {}: {}", name, e.message)
-            ctx.status(500).result(json.encodeToString(ErrorResponse.serializer(),
-                ErrorResponse("DDL failed: ${e.message}")))
-        }
-    }
 }
-
-@Serializable
-data class DdlExecuteRequest(
-    val stagingDdl: String? = null,
-    val targetDdl: String? = null
-)
 
 private fun tableExists(conn: java.sql.Connection, tableName: String): Boolean {
     conn.prepareStatement("SELECT 1 FROM user_tables WHERE table_name = ?").use { ps ->
@@ -217,7 +84,6 @@ private fun generateDdlFromDb(conn: java.sql.Connection, tableName: String): Str
     val columns = mutableListOf<String>()
     val pk = mutableListOf<String>()
 
-    // Get PK columns
     conn.prepareStatement("""
         SELECT cols.column_name FROM user_constraints cons
         JOIN user_cons_columns cols ON cons.constraint_name = cols.constraint_name
@@ -230,7 +96,6 @@ private fun generateDdlFromDb(conn: java.sql.Connection, tableName: String): Str
         }
     }
 
-    // Get columns
     conn.prepareStatement("""
         SELECT column_name, data_type, data_length, data_precision, data_scale, nullable
         FROM user_tab_columns WHERE table_name = ?
@@ -268,21 +133,8 @@ private fun generateDdlFromDb(conn: java.sql.Connection, tableName: String): Str
 }
 
 /**
- * Holds and persists the pipeline config (targets.json).
+ * Read-only config holder. targets.json is loaded once at startup.
  */
-class ConfigHolder(initial: PipelineConfig, private val configPath: String) {
-    @Volatile
-    var config: PipelineConfig = initial
-        private set
-
-    fun saveConfig(newConfig: PipelineConfig) {
-        config = newConfig
-        File(configPath).writeText(json.encodeToString(PipelineConfig.serializer(), newConfig))
-        log.info("Config saved to {}", configPath)
-    }
-
-    companion object {
-        private val log = LoggerFactory.getLogger(ConfigHolder::class.java)
-        private val json = Json { prettyPrint = true }
-    }
+class ConfigHolder(initial: PipelineConfig, @Suppress("unused") private val configPath: String) {
+    val config: PipelineConfig = initial
 }

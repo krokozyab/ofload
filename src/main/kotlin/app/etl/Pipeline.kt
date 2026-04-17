@@ -89,13 +89,13 @@ class Pipeline(private val cfg: PipelineConfig) {
                 var totalLoaded = 0L
                 var totalMerged = 0L
                 var pageNum = 0
-                var lastKeyValue: String? = null
+                var lastKeyValues: List<String?>? = null
 
                 do {
                     pageNum++
                     MDC.put("page", pageNum.toString())
 
-                    val result = loadPageWithRetry(target, sourceHolder, oracleConn, lastWm, lastKeyValue, pageNum)
+                    val result = loadPageWithRetry(target, sourceHolder, oracleConn, lastWm, lastKeyValues, pageNum)
 
                     if (result.rowsLoaded == 0L) break
 
@@ -105,7 +105,7 @@ class Pipeline(private val cfg: PipelineConfig) {
                     totalLoaded += result.rowsLoaded
                     totalMerged += merged
                     lastWm = result.newWm
-                    lastKeyValue = result.lastKeyValue
+                    lastKeyValues = result.lastKeyValues
 
                     WatermarkStore.finishRun(oracleConn, t, lastWm, totalLoaded)
                     oracleConn.commit()
@@ -140,7 +140,7 @@ class Pipeline(private val cfg: PipelineConfig) {
         sourceHolder: SourceConnHolder?,
         oracleConn: Connection,
         lastWm: String?,
-        lastKeyValue: String?,
+        lastKeyValues: List<String?>?,
         pageNum: Int
     ): LoadResult {
         val t = target.name
@@ -149,13 +149,13 @@ class Pipeline(private val cfg: PipelineConfig) {
         for (attempt in 1..MAX_SOURCE_RETRIES + 1) {
             try {
                 return if (sourceHolder != null) {
-                    log.info("[{}] Loading page {} (wm={}, lastKey={})", t, pageNum, lastWm, lastKeyValue)
-                    StagingLoader.load(target, sourceHolder.conn, oracleConn, lastWm, lastKeyValue)
+                    log.info("[{}] Loading page {} (wm={}, lastKeys={})", t, pageNum, lastWm, lastKeyValues)
+                    StagingLoader.load(target, sourceHolder.conn, oracleConn, lastWm, lastKeyValues)
                 } else {
                     log.info("[{}] Connecting to source", t)
                     SourceDs.getConnection().use { srcConn ->
-                        log.info("[{}] Source connected, loading page {} (wm={}, lastKey={})", t, pageNum, lastWm, lastKeyValue)
-                        StagingLoader.load(target, srcConn, oracleConn, lastWm, lastKeyValue)
+                        log.info("[{}] Source connected, loading page {} (wm={}, lastKeys={})", t, pageNum, lastWm, lastKeyValues)
+                        StagingLoader.load(target, srcConn, oracleConn, lastWm, lastKeyValues)
                     }
                 }
             } catch (e: Exception) {

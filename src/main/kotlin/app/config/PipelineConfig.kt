@@ -12,12 +12,14 @@ data class TargetConfig(
     val watermarkColumn: String,
     val watermarkType: String,       // "TIMESTAMP" | "NUMBER"
     val keyColumns: List<String>,
-    val columns: List<String>,
     val sourceQuery: String,
+    val targetInsert: String,
+    val targetMerge: String,
     val initialWm: String,
     val pageSize: Int? = null,
     val lookbackMinutes: Long? = null,
-    val group: Int? = null
+    val group: Int? = null,
+    val nlsSettings: Map<String, String>? = null
 )
 
 @Serializable

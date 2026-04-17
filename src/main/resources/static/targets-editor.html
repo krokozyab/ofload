@@ -124,7 +124,56 @@
         from { transform: translateX(0); opacity: 1; }
         to { transform: translateX(100%); opacity: 0; }
     }
+
+    /* Read-only mode — targets.json редактируется вручную в файле */
+    input:not([type=button]):not([type=submit]), textarea {
+        background-color: #f5f3f3 !important;
+        cursor: not-allowed;
+    }
+    button[onclick*="newTarget"],
+    button[onclick*="deleteTarget"],
+    button[onclick*="saveTarget"],
+    button[onclick*="executeDdl"],
+    button[onclick*="saveAndExecuteDdl"],
+    button[onclick*="parseQueryAndGenerate"],
+    button[onclick*="regenerateQuery"],
+    button[onclick*="setWmType"],
+    button[onclick*="addColumn"],
+    button[onclick*="removeColumn"],
+    span[onclick*="toggleKey"],
+    button#confirm-ok { display: none !important; }
+    #readonly-banner {
+        position: sticky; top: 0; z-index: 100;
+        background: #59413d; color: #fff;
+        padding: 10px 16px; text-align: center;
+        font-family: Inter, sans-serif; font-size: 13px; font-weight: 500;
+    }
 </style>
+<script>
+    // Helper: derive column list from INSERT INTO X (col1, col2, ...) VALUES (?, ?, ...)
+    window.getColumnsFromInsert = function(sql) {
+        if (!sql) return [];
+        const m = sql.match(/INSERT[\s\S]+?INTO\s+\S+\s*\(([^)]+)\)/i);
+        if (!m) return [];
+        return m[1].split(',').map(c => c.trim()).filter(c => c.length > 0);
+    };
+
+    document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('input, textarea').forEach(el => { el.readOnly = true; });
+        document.querySelectorAll('select').forEach(el => { el.disabled = true; });
+        const banner = document.createElement('div');
+        banner.id = 'readonly-banner';
+        banner.textContent = 'Read-only: targets.json редактируется вручную в src/main/resources/targets.json';
+        document.body.prepend(banner);
+        ['newTarget','deleteTarget','saveTarget','executeDdl','saveAndExecuteDdl',
+         'parseQueryAndGenerate','regenerateQuery','setWmType','addColumn','removeColumn','toggleKey']
+            .forEach(fn => {
+                if (typeof window[fn] === 'function') {
+                    window[fn] = () => (window.showToast ? window.showToast('Read-only mode', 'info') : null);
+                }
+            });
+    });
+</script>
 </head>
 <body class="bg-surface font-body text-on-surface selection:bg-primary-fixed selection:text-on-primary-fixed">
 
@@ -536,7 +585,7 @@ function renderTargetList() {
                 <div class="flex items-center gap-4 text-xs font-medium text-on-surface-variant/${isActive ? '70' : '50'}">
                     <div class="flex items-center gap-1">
                         <span class="material-symbols-outlined text-sm" data-icon="view_column">view_column</span>
-                        <span>${t.columns.length} Cols</span>
+                        <span>${getColumnsFromInsert(t.targetInsert).length} Cols</span>
                     </div>
                     <div class="flex items-center gap-1">
                         <span class="material-symbols-outlined text-sm" data-icon="vpn_key">vpn_key</span>
@@ -584,8 +633,8 @@ function selectTarget(name) {
     wmType = t.watermarkType || 'TIMESTAMP';
     updateWmTypeButtons();
 
-    // Build column defs from column name strings + keyColumns
-    columnDefs = t.columns.map(colName => ({
+    // Build column defs from targetInsert (columns field removed from config)
+    columnDefs = getColumnsFromInsert(t.targetInsert).map(colName => ({
         name: colName,
         type: 'VARCHAR2',
         length: 240,
