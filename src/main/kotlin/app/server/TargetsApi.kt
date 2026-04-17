@@ -172,11 +172,8 @@ private fun generateDdlFromDb(conn: java.sql.Connection, tableName: String): Str
 /**
  * Immutable in-memory holder of the parsed PipelineConfig.
  *
- * targets.json is loaded once at startup (see Main) and then only read — this class
- * is a thin wrapper so the config reference can be passed to components that need it
- * (RunManager, the HTTP endpoints). configPath is retained for backward compatibility
- * with earlier call sites but is no longer used — kept here to avoid a churn in Main.
+ * targets.json is loaded once at startup (see Main) from the classpath resource
+ * and then only read — this class is a thin wrapper so the config reference can
+ * be passed to components that need it (RunManager, the HTTP endpoints).
  */
-class ConfigHolder(initial: PipelineConfig, @Suppress("unused") private val configPath: String) {
-    val config: PipelineConfig = initial
-}
+class ConfigHolder(val config: PipelineConfig)

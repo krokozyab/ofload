@@ -15,11 +15,11 @@ import java.util.concurrent.TimeUnit
  * through the full lifecycle: watermark read → source stream to staging → merge into
  * final table → watermark update.
  *
- * Groups are the unit of source-side parallelism and SSO amortisation: targets sharing
- * a group id open ONE shared Fusion connection (one SSO handshake) and then run their
- * pages in parallel over it. Lone targets (no group or group size 1) open their own
- * connection. The ATP side uses the UCP pool in either case — no target is blocked
- * by another on the target side.
+ * Groups are a hint for parallelism: targets sharing a group id are executed in
+ * parallel on the shared [etlPool]. They do NOT share a source connection — every
+ * target opens its own source connection via [OwnedSourceConn] so there is no way
+ * for concurrent workers to step on each other's JDBC state. Lone targets (no group
+ * or group size 1) run synchronously on the caller thread.
  *
  * Idempotency: every run truncates staging and re-applies MERGE, so restarting a
  * partially-complete run cannot produce duplicates. Watermarks are persisted after
@@ -47,29 +47,25 @@ class Pipeline(private val cfg: PipelineConfig) {
     }
 
     /**
-     * A rebindable source connection shared between targets of the same group.
+     * Per-target source connection wrapper with safe reconnect on auth/session failure.
      *
-     * Fusion SSO sessions can expire or drop mid-run; when that happens we want to
-     * transparently re-open the underlying connection instead of failing the whole
-     * group. [reconnect] is synchronized so only one thread triggers the (expensive)
-     * SSO handshake when several parallel workers notice the drop simultaneously.
+     * Each target owns its own instance — connections are NOT shared across targets or
+     * threads. That removes the thread-safety burden on the underlying JDBC driver
+     * (ofjdbc is a REST wrapper and not guaranteed thread-safe) and sidesteps races
+     * between `reconnect()` and in-flight queries on other workers. The per-target
+     * isolation costs one SSO handshake per target but buys correctness.
      */
-    class SourceConnHolder(initial: Connection) : AutoCloseable {
-        @Volatile var conn: Connection = initial
+    private class OwnedSourceConn : AutoCloseable {
+        private val log = LoggerFactory.getLogger(OwnedSourceConn::class.java)
+        var conn: Connection = SourceDs.getConnection()
             private set
 
-        /**
-         * Close the current connection and open a fresh one via [SourceDs.getConnection].
-         * Synchronized so concurrent parallel workers cannot trigger duplicate SSO logins.
-         */
-        @Synchronized
-        fun reconnect(): Connection {
-            val log = LoggerFactory.getLogger(SourceConnHolder::class.java)
+        /** Close the current connection and open a fresh one. Called on auth-failure retry. */
+        fun reconnect() {
             log.warn("Reconnecting to source (SSO refresh)...")
             runCatching { conn.close() }
             conn = SourceDs.getConnection()
             log.info("Source reconnected")
-            return conn
         }
 
         override fun close() {
@@ -102,9 +98,9 @@ class Pipeline(private val cfg: PipelineConfig) {
      *
      * Targets are partitioned by group id (null groups become unique singletons) and
      * groups are run sequentially in ascending group-id order. Within a multi-target
-     * group, all targets share one [SourceConnHolder] and execute in parallel on a
-     * per-group thread pool sized to the group's target count. This amortises source-
-     * side SSO cost while bounding parallelism to something ATP and Fusion can handle.
+     * group, each target gets its own source connection and executes in parallel on
+     * [etlPool]. This bounds cross-target interference to zero at the cost of one SSO
+     * login per target per run.
      */
     fun runTargets(targets: List<TargetConfig>) {
         // Ungrouped targets get synthetic decreasing ids so they each form a single-
@@ -121,22 +117,17 @@ class Pipeline(private val cfg: PipelineConfig) {
                 runTarget(grpTargets[0])
             } else {
                 MDC.put("group", groupId.toString())
-                log.info("Group {}: running {} in parallel", groupId, grpTargets.map { it.name })
-                log.info("Group {}: connecting to source (single SSO)", groupId)
-                SourceConnHolder(SourceDs.getConnection()).use { holder ->
-                    log.info("Group {}: source connected", groupId)
-                    // Submit to the shared etlPool rather than creating a per-group pool.
-                    val futures = grpTargets.map { target ->
-                        etlPool.submit<Unit> {
-                            MDC.put("group", groupId.toString())
-                            runTarget(target, holder)
-                            MDC.remove("group")
-                        }
+                log.info("Group {}: running {} in parallel (each with its own source connection)",
+                    groupId, grpTargets.map { it.name })
+                val futures = grpTargets.map { target ->
+                    etlPool.submit<Unit> {
+                        MDC.put("group", groupId.toString())
+                        runTarget(target)
+                        MDC.remove("group")
                     }
-                    // Block until every parallel worker finishes so the group's
-                    // shared connection isn't closed while someone is still using it.
-                    futures.forEach { it.get() }
                 }
+                // Block until every parallel worker finishes.
+                futures.forEach { it.get() }
                 log.info("Group {}: done", groupId)
                 MDC.remove("group")
             }
@@ -146,80 +137,84 @@ class Pipeline(private val cfg: PipelineConfig) {
     /**
      * Full lifecycle of a single target on a single worker.
      *
-     * Steps: open ATP connection (autoCommit=false, we control txn boundaries);
-     * read last watermark and mark run as RUNNING; loop over pages of streaming
-     * load + merge + watermark update until the source returns less than pageSize
-     * rows; mark run as OK. On any failure (including JVM Error like OutOfMemoryError),
-     * roll back, record FAILED on a fresh connection, log — then re-throw Errors so
-     * the JVM can terminate cleanly instead of silently continuing in a broken state.
+     * Steps: open ATP connection (autoCommit=false, we control txn boundaries); open
+     * a dedicated source connection via [OwnedSourceConn]; read last watermark and
+     * mark run as RUNNING; loop over pages of streaming load + merge + watermark
+     * update until the source returns less than pageSize rows; mark run as OK.
+     * On any failure (including JVM Error like OutOfMemoryError), roll back, record
+     * FAILED on a fresh connection, log — then re-throw Errors so the JVM can
+     * terminate cleanly instead of silently continuing in a broken state.
      */
-    private fun runTarget(target: TargetConfig, sourceHolder: SourceConnHolder? = null) {
+    private fun runTarget(target: TargetConfig) {
         val t = target.name
         MDC.put("target", t)
         log.info("[{}] Starting", t)
         OracleDs.getConnection().use { oracleConn ->
             log.info("[{}] ATP connected", t)
             oracleConn.autoCommit = false
-            try {
-                var lastWm = WatermarkStore.read(oracleConn, t)
-                WatermarkStore.beginRun(oracleConn, t, target.watermarkColumn)
-                oracleConn.commit()
+            OwnedSourceConn().use { source ->
+                log.info("[{}] Source connected", t)
+                try {
+                    var lastWm = WatermarkStore.read(oracleConn, t)
+                    WatermarkStore.beginRun(oracleConn, t, target.watermarkColumn)
+                    oracleConn.commit()
 
-                var totalLoaded = 0L
-                var totalMerged = 0L
-                var pageNum = 0
-                var lastKeyValues: List<String?>? = null
+                    var totalLoaded = 0L
+                    var totalMerged = 0L
+                    var pageNum = 0
+                    var lastKeyValues: List<String?>? = null
 
-                // Page loop: one iteration per staging+merge cycle. Terminates when the
-                // source returns fewer rows than pageSize (no more pages) or when page-
-                // level rows hit zero. Each page's watermark is committed immediately,
-                // so a crash on page N leaves pages 0..N-1 durable.
-                do {
-                    pageNum++
-                    MDC.put("page", pageNum.toString())
+                    // Page loop: one iteration per staging+merge cycle. Terminates when
+                    // the source returns fewer rows than pageSize or when page-level rows
+                    // hit zero. Each page's watermark is committed immediately, so a crash
+                    // on page N leaves pages 0..N-1 durable.
+                    do {
+                        pageNum++
+                        MDC.put("page", pageNum.toString())
 
-                    val result = loadPageWithRetry(target, sourceHolder, oracleConn, lastWm, lastKeyValues, pageNum)
+                        val result = loadPageWithRetry(target, source, oracleConn, lastWm, lastKeyValues, pageNum)
 
-                    if (result.rowsLoaded == 0L) break
+                        if (result.rowsLoaded == 0L) break
 
-                    val startMerge = System.currentTimeMillis()
-                    val merged = TargetMerger.merge(oracleConn, target)
-                    log.info("[{}] Merged {} rows in {}ms", t, merged, System.currentTimeMillis() - startMerge)
-                    totalLoaded += result.rowsLoaded
-                    totalMerged += merged
-                    lastWm = result.newWm
-                    lastKeyValues = result.lastKeyValues
+                        val startMerge = System.currentTimeMillis()
+                        val merged = TargetMerger.merge(oracleConn, target)
+                        log.info("[{}] Merged {} rows in {}ms", t, merged, System.currentTimeMillis() - startMerge)
+                        totalLoaded += result.rowsLoaded
+                        totalMerged += merged
+                        lastWm = result.newWm
+                        lastKeyValues = result.lastKeyValues
+
+                        WatermarkStore.finishRun(oracleConn, t, lastWm, totalLoaded)
+                        oracleConn.commit()
+
+                        if (target.pageSize != null) {
+                            log.info("[{}] Page {}: loaded={}, merged={} | Total: loaded={}, merged={} | wm={}",
+                                t, pageNum, result.rowsLoaded, merged, totalLoaded, totalMerged, lastWm)
+                        }
+                    } while (target.pageSize != null && result.rowsLoaded.toInt() == target.pageSize)
 
                     WatermarkStore.finishRun(oracleConn, t, lastWm, totalLoaded)
                     oracleConn.commit()
-
-                    if (target.pageSize != null) {
-                        log.info("[{}] Page {}: loaded={}, merged={} | Total: loaded={}, merged={} | wm={}",
-                            t, pageNum, result.rowsLoaded, merged, totalLoaded, totalMerged, lastWm)
-                    }
-                } while (target.pageSize != null && result.rowsLoaded.toInt() == target.pageSize)
-
-                WatermarkStore.finishRun(oracleConn, t, lastWm, totalLoaded)
-                oracleConn.commit()
-                log.info("[{}] OK: total_loaded={}, total_merged={}, new_wm={}", t, totalLoaded, totalMerged, lastWm)
-            } catch (e: Throwable) {
-                // Catch Throwable (not just Exception) so OutOfMemoryError and other
-                // JVM-level Errors still produce a FAILED row — otherwise the run would
-                // be left RUNNING forever and only resetStaleRunning at next startup
-                // would clean it up. Record the failure on a FRESH connection because
-                // oracleConn may already be poisoned.
-                runCatching { oracleConn.rollback() }
-                runCatching {
-                    OracleDs.getConnection().use { failConn ->
-                        failConn.autoCommit = true
-                        WatermarkStore.failRun(failConn, t, e.message ?: "unknown error")
-                    }
-                }.onFailure { log.warn("[{}] Failed to record FAILED status: {}", t, it.message) }
-                log.error("[{}] FAILED: {}", t, e.message, e)
-                // Re-throw Errors so the JVM doesn't silently continue in a broken
-                // state (OOM, StackOverflow, etc). Plain Exceptions are swallowed —
-                // the FAILED row in ETL_WATERMARK is the caller-visible signal.
-                if (e is Error) throw e
+                    log.info("[{}] OK: total_loaded={}, total_merged={}, new_wm={}", t, totalLoaded, totalMerged, lastWm)
+                } catch (e: Throwable) {
+                    // Catch Throwable (not just Exception) so OutOfMemoryError and other
+                    // JVM-level Errors still produce a FAILED row — otherwise the run
+                    // would be left RUNNING forever and only resetStaleRunning at next
+                    // startup would clean it up. Record the failure on a FRESH connection
+                    // because oracleConn may already be poisoned.
+                    runCatching { oracleConn.rollback() }
+                    runCatching {
+                        OracleDs.getConnection().use { failConn ->
+                            failConn.autoCommit = true
+                            WatermarkStore.failRun(failConn, t, e.message ?: "unknown error")
+                        }
+                    }.onFailure { log.warn("[{}] Failed to record FAILED status: {}", t, it.message) }
+                    log.error("[{}] FAILED: {}", t, e.message, e)
+                    // Re-throw Errors so the JVM doesn't silently continue in a broken
+                    // state (OOM, StackOverflow, etc). Plain Exceptions are swallowed —
+                    // the FAILED row in ETL_WATERMARK is the caller-visible signal.
+                    if (e is Error) throw e
+                }
             }
         }
         MDC.remove("target")
@@ -230,14 +225,13 @@ class Pipeline(private val cfg: PipelineConfig) {
      * Wrap [StagingLoader.load] with a retry loop for transient source-auth failures.
      *
      * If the source throws an auth-like error (401, token expired, session invalidated)
-     * we reconnect via the shared holder and retry up to [MAX_SOURCE_RETRIES] times —
-     * staging is already truncated at that point, so retries are idempotent. Any other
-     * exception propagates immediately. Non-group runs without a holder open a fresh
-     * connection per attempt.
+     * we reconnect via the target's own [OwnedSourceConn] and retry up to
+     * [MAX_SOURCE_RETRIES] times — staging is truncated on entry so retries are
+     * idempotent. Any other exception propagates immediately.
      */
     private fun loadPageWithRetry(
         target: TargetConfig,
-        sourceHolder: SourceConnHolder?,
+        source: OwnedSourceConn,
         oracleConn: Connection,
         lastWm: String?,
         lastKeyValues: List<String?>?,
@@ -248,24 +242,14 @@ class Pipeline(private val cfg: PipelineConfig) {
 
         for (attempt in 1..MAX_SOURCE_RETRIES + 1) {
             try {
-                return if (sourceHolder != null) {
-                    log.info("[{}] Loading page {} (wm={}, lastKeys={})", t, pageNum, lastWm, lastKeyValues)
-                    StagingLoader.load(target, sourceHolder.conn, oracleConn, lastWm, lastKeyValues)
-                } else {
-                    log.info("[{}] Connecting to source", t)
-                    SourceDs.getConnection().use { srcConn ->
-                        log.info("[{}] Source connected, loading page {} (wm={}, lastKeys={})", t, pageNum, lastWm, lastKeyValues)
-                        StagingLoader.load(target, srcConn, oracleConn, lastWm, lastKeyValues)
-                    }
-                }
+                log.info("[{}] Loading page {} (wm={}, lastKeys={})", t, pageNum, lastWm, lastKeyValues)
+                return StagingLoader.load(target, source.conn, oracleConn, lastWm, lastKeyValues)
             } catch (e: Exception) {
                 lastError = e
                 if (attempt <= MAX_SOURCE_RETRIES && isSourceAuthError(e)) {
                     log.warn("[{}] Source error on attempt {}/{}: {}. Reconnecting...",
                         t, attempt, MAX_SOURCE_RETRIES + 1, e.message)
-                    if (sourceHolder != null) {
-                        sourceHolder.reconnect()
-                    }
+                    source.reconnect()
                     // Staging was truncated on entry, safe to retry without dedup concerns.
                 } else {
                     throw e

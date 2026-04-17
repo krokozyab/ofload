@@ -19,19 +19,16 @@ private val log = LoggerFactory.getLogger("app.Main")
  * Loads targets.json from the classpath, wires the in-memory [ConfigHolder],
  * [Pipeline] and [RunManager], cleans up any stale RUNNING watermarks left behind
  * by previous crashed runs, then starts the Javalin HTTP server that exposes the
- * dashboard, the read-only targets page, and the /run* endpoints. A shutdown hook
+ * dashboard, the read-only targets page, and the /run endpoints. A shutdown hook
  * gives in-flight ETL runs up to 5 minutes to finish before forcing exit.
  */
 fun main() {
-    val configPath = System.getenv("TARGETS_CONFIG")
-        ?: "src/main/resources/targets.json"
-
     val configStream = object {}.javaClass.getResourceAsStream("/targets.json")
         ?: error("targets.json not found in resources")
     val config = loadConfig(configStream)
     log.info("Loaded {} target(s): {}", config.targets.size, config.targets.map { it.name })
 
-    val configHolder = ConfigHolder(config, configPath)
+    val configHolder = ConfigHolder(config)
     val pipeline = Pipeline(config)
     val runManager = RunManager(configHolder, pipeline)
 

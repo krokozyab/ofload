@@ -15,6 +15,13 @@ import java.sql.Connection
  *
  * Configuration is entirely env-var driven (DB_USER, DB_PASSWORD, DB_CONNECT_STRING,
  * optional TNS_ADMIN) — no secrets live in the codebase.
+ *
+ * Session state policy: every borrow re-applies a known NLS baseline via ALTER SESSION
+ * (see [applyBaseline]). ETL code is free to add target-specific overrides on top
+ * during a run; those overrides are wiped on the next borrow so state never leaks
+ * between targets via the pool. UCP's ConnectionInitializationCallback is not used
+ * because without connection labelling it only fires on physical connect, not on
+ * logical borrow — the [getConnection] hook is a reliable equivalent.
  */
 object OracleDs {
     private val log = LoggerFactory.getLogger(OracleDs::class.java)
@@ -46,8 +53,29 @@ object OracleDs {
     }
 
     /**
-     * Borrow a connection from the pool. Caller owns closing it (use try-with-resources /
-     * Kotlin `use {}`) — closing returns the connection to the pool, it is not destroyed.
+     * Borrow a connection from the pool and reset its session to a known NLS baseline.
+     * Caller owns closing it (use try-with-resources / Kotlin `use {}`) — closing returns
+     * the connection to the pool, it is not destroyed.
      */
-    fun getConnection(): Connection = pool.connection
+    fun getConnection(): Connection {
+        val conn = pool.connection
+        applyBaseline(conn)
+        return conn
+    }
+
+    /**
+     * Reset the pooled session to a deterministic NLS baseline so target N never sees
+     * NLS settings left behind by target N-1. Combined into a single ALTER SESSION so
+     * the reset costs one round-trip, not three.
+     */
+    private fun applyBaseline(conn: Connection) {
+        conn.createStatement().use { st ->
+            st.execute(
+                "ALTER SESSION SET " +
+                    "NLS_DATE_FORMAT='YYYY-MM-DD' " +
+                    "NLS_TIMESTAMP_FORMAT='YYYY-MM-DD HH24:MI:SS.FF' " +
+                    "NLS_NUMERIC_CHARACTERS='.,'"
+            )
+        }
+    }
 }

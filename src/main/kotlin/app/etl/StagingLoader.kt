@@ -46,6 +46,13 @@ object StagingLoader {
     private const val BATCH_SIZE = 10000
 
     /**
+     * Required placeholder in [app.config.TargetConfig.sourceQuery] that marks where
+     * the watermark predicate gets injected on each page. Replaced with `wmCol > ?`
+     * on the first page and a tuple-seek expression on subsequent pages.
+     */
+    private const val WM_MARKER = "/*WM*/"
+
+    /**
      * Load one page of data from source into staging.
      *
      * @param target configuration describing source query, staging table and keys.
@@ -95,20 +102,24 @@ object StagingLoader {
         //    as the last row of the previous page. Tuple pagination — ORDER BY (wm, keys...)
         //    + WHERE (wm > ? OR (wm = ? AND (keys) > (?,?,...))) — is a strict-increase
         //    seek that works correctly even for composite keys and watermark ties.
+        //
+        //    The sourceQuery carries an explicit `/*WM*/` marker where the watermark
+        //    predicate should go — the pipeline substitutes it per-page. This is more
+        //    robust than pattern-matching `wmCol > ?` in free SQL (which silently breaks
+        //    on aliases, extra spaces, additional WHERE clauses, etc.).
+        require(target.sourceQuery.contains(WM_MARKER)) {
+            "targets.json: sourceQuery for '${target.name}' must contain $WM_MARKER where the watermark predicate should be injected"
+        }
         val keyColsCsv = target.keyColumns.joinToString(", ")
         val keyPlaceholders = target.keyColumns.joinToString(", ") { "?" }
+        val firstPagePredicate = "${target.watermarkColumn} > ?"
+        val seekPredicate = "(${target.watermarkColumn} > ? OR (${target.watermarkColumn} = ? AND ($keyColsCsv) > ($keyPlaceholders)))"
         val query = if (target.pageSize != null) {
-            if (lastKeyValues != null) {
-                val baseQuery = target.sourceQuery.replace(
-                    "${target.watermarkColumn} > ?",
-                    "(${target.watermarkColumn} > ? OR (${target.watermarkColumn} = ? AND ($keyColsCsv) > ($keyPlaceholders)))"
-                )
-                "SELECT * FROM ($baseQuery ORDER BY ${target.watermarkColumn}, $keyColsCsv) WHERE ROWNUM <= ${target.pageSize}"
-            } else {
-                "SELECT * FROM (${target.sourceQuery} ORDER BY ${target.watermarkColumn}, $keyColsCsv) WHERE ROWNUM <= ${target.pageSize}"
-            }
+            val predicate = if (lastKeyValues != null) seekPredicate else firstPagePredicate
+            val baseQuery = target.sourceQuery.replace(WM_MARKER, predicate)
+            "SELECT * FROM ($baseQuery ORDER BY ${target.watermarkColumn}, $keyColsCsv) WHERE ROWNUM <= ${target.pageSize}"
         } else {
-            target.sourceQuery
+            target.sourceQuery.replace(WM_MARKER, firstPagePredicate)
         }
 
         // 5. Stream source → staging without an intermediate buffer.

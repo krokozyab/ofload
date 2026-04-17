@@ -107,17 +107,25 @@ object WatermarkStore {
      * with the current UTC timestamp. Done via MERGE so the code path is the same for
      * brand-new and previously-seen targets, and so it's safe to re-run if the caller
      * decides to retry on transient DB errors.
+     *
+     * Clears `LAST_RUN_FINISHED`, `ROWS_LOADED` and `ERROR_MESSAGE` on entry so the UI
+     * never shows stale "finished at" / "loaded N rows" / "error:" values carried over
+     * from the previous run while the current run is in progress.
      */
     fun beginRun(conn: Connection, targetName: String, wmColumn: String) {
         val sql = """
             MERGE INTO ETL_WATERMARK w
             USING (SELECT ? AS TN FROM DUAL) s ON (w.TARGET_NAME = s.TN)
             WHEN MATCHED THEN UPDATE SET
-                LAST_STATUS = 'RUNNING', LAST_RUN_STARTED = SYS_EXTRACT_UTC(SYSTIMESTAMP),
-                WM_COLUMN = ?, ERROR_MESSAGE = NULL
+                LAST_STATUS = 'RUNNING',
+                LAST_RUN_STARTED = SYS_EXTRACT_UTC(SYSTIMESTAMP),
+                LAST_RUN_FINISHED = NULL,
+                ROWS_LOADED = 0,
+                WM_COLUMN = ?,
+                ERROR_MESSAGE = NULL
             WHEN NOT MATCHED THEN INSERT
-                (TARGET_NAME, WM_COLUMN, LAST_STATUS, LAST_RUN_STARTED)
-                VALUES (?, ?, 'RUNNING', SYS_EXTRACT_UTC(SYSTIMESTAMP))
+                (TARGET_NAME, WM_COLUMN, LAST_STATUS, LAST_RUN_STARTED, ROWS_LOADED)
+                VALUES (?, ?, 'RUNNING', SYS_EXTRACT_UTC(SYSTIMESTAMP), 0)
         """.trimIndent()
         conn.prepareStatement(sql).use { ps ->
             ps.setString(1, targetName)

@@ -104,10 +104,51 @@ fun configureRoutes(app: Javalin, runManager: RunManager, configHolder: ConfigHo
     }
 
     /**
-     * GET /health — liveness + DB connectivity probe.
-     * 200 with status=ok when a SELECT 1 FROM DUAL succeeds, 503 with status=degraded
-     * otherwise. Used by load balancers to decide whether to route traffic here.
+     * GET /live — pure liveness probe. Returns 200 as long as the JVM is alive and
+     * serving HTTP. No DB access, no external dependencies. Intended for k8s
+     * livenessProbe — flapping here means restart the pod.
      */
+    app.get("/live") { ctx ->
+        ctx.status(200).result(encode(HealthResponse(status = "ok", db = "n/a")))
+    }
+
+    /**
+     * GET /ready — readiness probe. Returns 200 only when we can actually serve ETL
+     * traffic: target DB reachable AND source driver registered. 503 otherwise.
+     * Intended for k8s readinessProbe — failures here take the pod out of rotation
+     * without restarting it.
+     *
+     * Source check is intentionally lightweight (env vars + driver class loaded) to
+     * avoid triggering a full SSO handshake on every probe.
+     */
+    app.get("/ready") { ctx ->
+        val dbOk = try {
+            OracleDs.getConnection().use { conn ->
+                conn.createStatement().use { it.execute("SELECT 1 FROM DUAL") }
+            }
+            true
+        } catch (e: Exception) {
+            log.warn("/ready target-db check failed: {}", e.message)
+            false
+        }
+        val sourceOk = System.getenv("SOURCE_URL") != null &&
+                       System.getenv("SOURCE_DRIVER_CLASS") != null &&
+                       runCatching { Class.forName(System.getenv("SOURCE_DRIVER_CLASS")) }.isSuccess
+
+        if (dbOk && sourceOk) {
+            ctx.status(200).result(encode(HealthResponse(status = "ready", db = "connected")))
+        } else {
+            val reason = buildString {
+                if (!dbOk) append("target-db unreachable; ")
+                if (!sourceOk) append("source driver unavailable; ")
+            }
+            ctx.status(503).result(encode(HealthResponse(status = "degraded",
+                db = if (dbOk) "connected" else "error",
+                error = reason.trimEnd(' ', ';'))))
+        }
+    }
+
+    /** GET /health — backward-compat alias of /ready (existing dashboard polls /health). */
     app.get("/health") { ctx ->
         try {
             OracleDs.getConnection().use { conn ->
