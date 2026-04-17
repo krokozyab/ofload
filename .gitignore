@@ -47,3 +47,6 @@ bin/
 ### Oracle Wallet ###
 wallet/
 run.sh
+
+### Claude Code (local agent state/permissions) ###
+.claude/

@@ -8,9 +8,18 @@ import org.slf4j.LoggerFactory
 private val log = LoggerFactory.getLogger("app.server.Routes")
 private val json = Json { prettyPrint = true }
 
+/**
+ * Wires the HTTP surface of the service: two HTML pages, a config/status pair for the
+ * dashboard, /run* endpoints that trigger ETL, and /health for liveness probes.
+ *
+ * Nothing mutates state synchronously — /run* endpoints return 202 Accepted while the
+ * actual ETL work runs on [RunManager]'s thread pool. This keeps the HTTP layer cheap
+ * enough to sit behind a default-timeout load balancer while long-running loads proceed
+ * in the background.
+ */
 fun configureRoutes(app: Javalin, runManager: RunManager, configHolder: ConfigHolder) {
 
-    // Dashboard
+    /** GET / — serves the dashboard HTML from the classpath. */
     app.get("/") { ctx ->
         val html = object {}.javaClass.getResourceAsStream("/static/dashboard.html")
         if (html != null) {
@@ -20,7 +29,7 @@ fun configureRoutes(app: Javalin, runManager: RunManager, configHolder: ConfigHo
         }
     }
 
-    // Targets editor page
+    /** GET /targets — serves the read-only targets visualisation page. */
     app.get("/targets") { ctx ->
         val html = object {}.javaClass.getResourceAsStream("/static/targets-editor.html")
         if (html != null) {
@@ -30,12 +39,20 @@ fun configureRoutes(app: Javalin, runManager: RunManager, configHolder: ConfigHo
         }
     }
 
-    // Config endpoint for dashboard (target names + groups)
+    /**
+     * GET /config — thin target list (name + group) for the dashboard navigation.
+     * Separate from /api/targets (full config) to keep the dashboard lightweight
+     * and avoid shipping big SQL blobs to every browser tab.
+     */
     app.get("/config") { ctx ->
         val targets = configHolder.config.targets.map { ConfigTarget(it.name, it.group) }
         ctx.status(200).result(json.encodeToString(ConfigResponse.serializer(), ConfigResponse(targets)))
     }
 
+    /**
+     * POST /run — kick off a pipeline run for every configured target.
+     * Returns 202 on success, 409 if every target was already running.
+     */
     app.post("/run") { ctx ->
         val resp = runManager.submitAll()
         if (resp.targets.isEmpty()) {
@@ -45,6 +62,11 @@ fun configureRoutes(app: Javalin, runManager: RunManager, configHolder: ConfigHo
         }
     }
 
+    /**
+     * POST /run/group/{groupId} — run only the targets of a specific group.
+     * Returns 404 when no targets carry that group id, 409 when all of them were
+     * already running, 202 on success.
+     */
     app.post("/run/group/{groupId}") { ctx ->
         val groupId = ctx.pathParam("groupId").toIntOrNull()
         if (groupId == null) {
@@ -63,6 +85,10 @@ fun configureRoutes(app: Javalin, runManager: RunManager, configHolder: ConfigHo
         }
     }
 
+    /**
+     * POST /run/target/{name} — run a single target.
+     * 404 if the name is unknown, 409 if already running, 202 on success.
+     */
     app.post("/run/target/{name}") { ctx ->
         val name = ctx.pathParam("name")
         val resp = runManager.submitTarget(name)
@@ -77,6 +103,11 @@ fun configureRoutes(app: Javalin, runManager: RunManager, configHolder: ConfigHo
         }
     }
 
+    /**
+     * GET /health — liveness + DB connectivity probe.
+     * 200 with status=ok when a SELECT 1 FROM DUAL succeeds, 503 with status=degraded
+     * otherwise. Used by load balancers to decide whether to route traffic here.
+     */
     app.get("/health") { ctx ->
         try {
             OracleDs.getConnection().use { conn ->
@@ -89,12 +120,19 @@ fun configureRoutes(app: Javalin, runManager: RunManager, configHolder: ConfigHo
         }
     }
 
+    /**
+     * GET /status — consolidated run state for the dashboard.
+     * Merges in-memory "running now" flags with persisted watermarks so the UI can
+     * display both the live state and the last persisted outcome per target.
+     */
     app.get("/status") { ctx ->
         val status = runManager.getStatus()
         ctx.status(200).result(encode(status))
     }
 }
 
+/* Overloaded encoders — kotlinx.serialization requires an explicit serializer per type
+ * at the call site, so we keep one encode-per-DTO helper to keep endpoint handlers tidy. */
 private fun encode(resp: RunResponse) = json.encodeToString(RunResponse.serializer(), resp)
 private fun encode(resp: ErrorResponse) = json.encodeToString(ErrorResponse.serializer(), resp)
 private fun encode(resp: HealthResponse) = json.encodeToString(HealthResponse.serializer(), resp)

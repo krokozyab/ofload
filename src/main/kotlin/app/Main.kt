@@ -13,6 +13,15 @@ import org.slf4j.LoggerFactory
 
 private val log = LoggerFactory.getLogger("app.Main")
 
+/**
+ * Service entry point.
+ *
+ * Loads targets.json from the classpath, wires the in-memory [ConfigHolder],
+ * [Pipeline] and [RunManager], cleans up any stale RUNNING watermarks left behind
+ * by previous crashed runs, then starts the Javalin HTTP server that exposes the
+ * dashboard, the read-only targets page, and the /run* endpoints. A shutdown hook
+ * gives in-flight ETL runs up to 5 minutes to finish before forcing exit.
+ */
 fun main() {
     val configPath = System.getenv("TARGETS_CONFIG")
         ?: "src/main/resources/targets.json"
@@ -26,7 +35,9 @@ fun main() {
     val pipeline = Pipeline(config)
     val runManager = RunManager(configHolder, pipeline)
 
-    // Reset stale RUNNING targets from previous crashed runs
+    // Reset stale RUNNING targets left by a previous crashed JVM.
+    // If this fails the service still starts — the watermark layer is advisory
+    // and the pipeline will overwrite stale state on the next successful run.
     try {
         OracleDs.getConnection().use { conn ->
             conn.autoCommit = false
@@ -44,6 +55,7 @@ fun main() {
     configureRoutes(app, runManager, configHolder)
     configureTargetsApi(app, configHolder)
 
+    // Give in-flight runs a chance to finish cleanly on SIGTERM/SIGINT.
     Runtime.getRuntime().addShutdownHook(Thread {
         log.info("Shutting down...")
         app.stop()

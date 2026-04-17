@@ -9,21 +9,45 @@ import org.slf4j.MDC
 import java.sql.Connection
 import java.util.concurrent.Executors
 
+/**
+ * ETL orchestrator — walks the list of targets, grouping them, and drives each target
+ * through the full lifecycle: watermark read → source stream to staging → merge into
+ * final table → watermark update.
+ *
+ * Groups are the unit of source-side parallelism and SSO amortisation: targets sharing
+ * a group id open ONE shared Fusion connection (one SSO handshake) and then run their
+ * pages in parallel over it. Lone targets (no group or group size 1) open their own
+ * connection. The ATP side uses the UCP pool in either case — no target is blocked
+ * by another on the target side.
+ *
+ * Idempotency: every run truncates staging and re-applies MERGE, so restarting a
+ * partially-complete run cannot produce duplicates. Watermarks are persisted after
+ * each successful page, so progress survives crashes.
+ */
 class Pipeline(private val cfg: PipelineConfig) {
     private val log = LoggerFactory.getLogger(Pipeline::class.java)
 
     companion object {
+        /** How many times to retry a source auth/session failure before giving up. */
         private const val MAX_SOURCE_RETRIES = 2
     }
 
     /**
-     * Holds a shared source connection that can be reconnected on auth failure.
-     * Thread-safe: reconnect is synchronized so only one thread triggers SSO.
+     * A rebindable source connection shared between targets of the same group.
+     *
+     * Fusion SSO sessions can expire or drop mid-run; when that happens we want to
+     * transparently re-open the underlying connection instead of failing the whole
+     * group. [reconnect] is synchronized so only one thread triggers the (expensive)
+     * SSO handshake when several parallel workers notice the drop simultaneously.
      */
     class SourceConnHolder(initial: Connection) : AutoCloseable {
         @Volatile var conn: Connection = initial
             private set
 
+        /**
+         * Close the current connection and open a fresh one via [SourceDs.getConnection].
+         * Synchronized so concurrent parallel workers cannot trigger duplicate SSO logins.
+         */
         @Synchronized
         fun reconnect(): Connection {
             val log = LoggerFactory.getLogger(SourceConnHolder::class.java)
@@ -39,9 +63,22 @@ class Pipeline(private val cfg: PipelineConfig) {
         }
     }
 
+    /** Run every target in the loaded config. Used by Main for full-pipeline batch runs. */
     fun run() = runTargets(cfg.targets)
 
+    /**
+     * Run the given subset of targets, respecting group membership.
+     *
+     * Targets are partitioned by group id (null groups become unique singletons) and
+     * groups are run sequentially in ascending group-id order. Within a multi-target
+     * group, all targets share one [SourceConnHolder] and execute in parallel on a
+     * per-group thread pool sized to the group's target count. This amortises source-
+     * side SSO cost while bounding parallelism to something ATP and Fusion can handle.
+     */
     fun runTargets(targets: List<TargetConfig>) {
+        // Ungrouped targets get synthetic decreasing ids so they each form a single-
+        // element group, and ordered groups come first (ascending) — a deterministic
+        // execution order helpful for reproducing issues.
         var seqId = Int.MIN_VALUE
         val groups = targets
             .map { it to (it.group ?: seqId--) }
@@ -65,6 +102,8 @@ class Pipeline(private val cfg: PipelineConfig) {
                             MDC.remove("group")
                         }
                     }
+                    // Block until every parallel worker finishes so the group's
+                    // shared connection isn't closed while someone is still using it.
                     futures.forEach { it.get() }
                     pool.shutdown()
                 }
@@ -74,6 +113,16 @@ class Pipeline(private val cfg: PipelineConfig) {
         }
     }
 
+    /**
+     * Full lifecycle of a single target on a single worker.
+     *
+     * Steps: open ATP connection (autoCommit=false, we control txn boundaries);
+     * read last watermark and mark run as RUNNING; loop over pages of streaming
+     * load + merge + watermark update until the source returns less than pageSize
+     * rows; mark run as OK. On any failure (including JVM Error like OutOfMemoryError),
+     * roll back, record FAILED on a fresh connection, log — then re-throw Errors so
+     * the JVM can terminate cleanly instead of silently continuing in a broken state.
+     */
     private fun runTarget(target: TargetConfig, sourceHolder: SourceConnHolder? = null) {
         val t = target.name
         MDC.put("target", t)
@@ -91,6 +140,10 @@ class Pipeline(private val cfg: PipelineConfig) {
                 var pageNum = 0
                 var lastKeyValues: List<String?>? = null
 
+                // Page loop: one iteration per staging+merge cycle. Terminates when the
+                // source returns fewer rows than pageSize (no more pages) or when page-
+                // level rows hit zero. Each page's watermark is committed immediately,
+                // so a crash on page N leaves pages 0..N-1 durable.
                 do {
                     pageNum++
                     MDC.put("page", pageNum.toString())
@@ -120,6 +173,11 @@ class Pipeline(private val cfg: PipelineConfig) {
                 oracleConn.commit()
                 log.info("[{}] OK: total_loaded={}, total_merged={}, new_wm={}", t, totalLoaded, totalMerged, lastWm)
             } catch (e: Throwable) {
+                // Catch Throwable (not just Exception) so OutOfMemoryError and other
+                // JVM-level Errors still produce a FAILED row — otherwise the run would
+                // be left RUNNING forever and only resetStaleRunning at next startup
+                // would clean it up. Record the failure on a FRESH connection because
+                // oracleConn may already be poisoned.
                 runCatching { oracleConn.rollback() }
                 runCatching {
                     OracleDs.getConnection().use { failConn ->
@@ -128,6 +186,9 @@ class Pipeline(private val cfg: PipelineConfig) {
                     }
                 }.onFailure { log.warn("[{}] Failed to record FAILED status: {}", t, it.message) }
                 log.error("[{}] FAILED: {}", t, e.message, e)
+                // Re-throw Errors so the JVM doesn't silently continue in a broken
+                // state (OOM, StackOverflow, etc). Plain Exceptions are swallowed —
+                // the FAILED row in ETL_WATERMARK is the caller-visible signal.
                 if (e is Error) throw e
             }
         }
@@ -135,6 +196,15 @@ class Pipeline(private val cfg: PipelineConfig) {
         MDC.remove("page")
     }
 
+    /**
+     * Wrap [StagingLoader.load] with a retry loop for transient source-auth failures.
+     *
+     * If the source throws an auth-like error (401, token expired, session invalidated)
+     * we reconnect via the shared holder and retry up to [MAX_SOURCE_RETRIES] times —
+     * staging is already truncated at that point, so retries are idempotent. Any other
+     * exception propagates immediately. Non-group runs without a holder open a fresh
+     * connection per attempt.
+     */
     private fun loadPageWithRetry(
         target: TargetConfig,
         sourceHolder: SourceConnHolder?,
@@ -166,7 +236,7 @@ class Pipeline(private val cfg: PipelineConfig) {
                     if (sourceHolder != null) {
                         sourceHolder.reconnect()
                     }
-                    // Staging was truncated, safe to retry
+                    // Staging was truncated on entry, safe to retry without dedup concerns.
                 } else {
                     throw e
                 }
@@ -175,6 +245,14 @@ class Pipeline(private val cfg: PipelineConfig) {
         throw lastError!!
     }
 
+    /**
+     * Heuristic classifier for "is this a transient SSO/auth failure worth retrying?".
+     *
+     * Matches on the exception message text — not ideal, but ofjdbc surfaces auth
+     * failures as generic SQLExceptions without a dedicated vendor code, so string
+     * matching is the only signal available. False positives only cost one extra
+     * reconnect+retry, so the matcher is deliberately lenient.
+     */
     private fun isSourceAuthError(e: Exception): Boolean {
         val msg = e.message?.lowercase() ?: ""
         return msg.contains("401") ||
