@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory
 import org.slf4j.MDC
 import java.sql.Connection
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * ETL orchestrator — walks the list of targets, grouping them, and drives each target
@@ -30,6 +31,19 @@ class Pipeline(private val cfg: PipelineConfig) {
     companion object {
         /** How many times to retry a source auth/session failure before giving up. */
         private const val MAX_SOURCE_RETRIES = 2
+    }
+
+    /**
+     * Long-lived worker pool shared by every group's parallel target execution.
+     *
+     * Using a single cachedThreadPool (instead of per-group newFixedThreadPool) avoids
+     * the overhead of creating and shutting down an executor for each group and avoids
+     * the nested-executors antipattern where RunManager's pool runs a task that
+     * creates its own pool. Threads are daemon so they don't block JVM exit if we
+     * forget to shut the pool down; [shutdown] still awaits cleanly on the normal path.
+     */
+    private val etlPool = Executors.newCachedThreadPool { r ->
+        Thread(r, "etl-worker").apply { isDaemon = true }
     }
 
     /**
@@ -67,6 +81,23 @@ class Pipeline(private val cfg: PipelineConfig) {
     fun run() = runTargets(cfg.targets)
 
     /**
+     * Gracefully stop the shared ETL worker pool.
+     *
+     * Called from [app.server.RunManager.shutdown] after the RunManager's submission
+     * pool has drained — at that point no new targets can be queued, so awaiting the
+     * etlPool here is bounded by whatever target work is already in flight.
+     * Waits up to 5 minutes, then force-cancels.
+     */
+    fun shutdown() {
+        log.info("Pipeline etlPool shutting down...")
+        etlPool.shutdown()
+        if (!etlPool.awaitTermination(5, TimeUnit.MINUTES)) {
+            log.warn("Pipeline etlPool did not terminate cleanly, forcing shutdown")
+            etlPool.shutdownNow()
+        }
+    }
+
+    /**
      * Run the given subset of targets, respecting group membership.
      *
      * Targets are partitioned by group id (null groups become unique singletons) and
@@ -94,9 +125,9 @@ class Pipeline(private val cfg: PipelineConfig) {
                 log.info("Group {}: connecting to source (single SSO)", groupId)
                 SourceConnHolder(SourceDs.getConnection()).use { holder ->
                     log.info("Group {}: source connected", groupId)
-                    val pool = Executors.newFixedThreadPool(grpTargets.size)
+                    // Submit to the shared etlPool rather than creating a per-group pool.
                     val futures = grpTargets.map { target ->
-                        pool.submit<Unit> {
+                        etlPool.submit<Unit> {
                             MDC.put("group", groupId.toString())
                             runTarget(target, holder)
                             MDC.remove("group")
@@ -105,7 +136,6 @@ class Pipeline(private val cfg: PipelineConfig) {
                     // Block until every parallel worker finishes so the group's
                     // shared connection isn't closed while someone is still using it.
                     futures.forEach { it.get() }
-                    pool.shutdown()
                 }
                 log.info("Group {}: done", groupId)
                 MDC.remove("group")

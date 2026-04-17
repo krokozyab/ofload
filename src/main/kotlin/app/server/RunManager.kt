@@ -140,8 +140,10 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
     }
 
     /**
-     * Graceful shutdown on JVM exit: stop accepting new submissions and wait up to
-     * 5 minutes for in-flight runs to finish, then force-cancel anything remaining.
+     * Graceful shutdown on JVM exit: stop accepting new submissions, drain in-flight
+     * runs (up to 5 minutes), then tear down the Pipeline's ETL worker pool too.
+     * Shuts pools down in dependency order — outer submission pool first, so no new
+     * target work can be queued; then Pipeline's inner pool once remaining work drains.
      * Prevents half-committed ETL state caused by killing the process mid-merge.
      */
     fun shutdown() {
@@ -151,6 +153,7 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
             log.warn("Forcing shutdown, {} targets still running", runningTargets.size)
             executor.shutdownNow()
         }
+        pipeline.shutdown()
     }
 
     /**

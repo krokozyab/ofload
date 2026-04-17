@@ -268,13 +268,13 @@ function formatNumber(n) {
     return Number(n).toLocaleString('en-US');
 }
 
+// API serialises timestamps as ISO-8601 with a trailing 'Z' (see WatermarkStore.toIsoUtc).
+// `new Date(isoString)` parses that natively and yields an absolute instant, so the UI
+// renders correctly regardless of DB session TZ or the user's browser TZ.
 function parseTs(s) {
     if (!s) return NaN;
-    // "2026-04-12 16:11:22.479602" → parse as UTC (Oracle SYSTIMESTAMP is in DB timezone = UTC)
-    const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/);
-    if (!m) return NaN;
-    const ms = m[7] ? parseInt(m[7].substring(0, 3).padEnd(3, '0')) : 0;
-    return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6], ms);
+    const t = new Date(s).getTime();
+    return isNaN(t) ? NaN : t;
 }
 
 function relativeTime(isoStr) {
