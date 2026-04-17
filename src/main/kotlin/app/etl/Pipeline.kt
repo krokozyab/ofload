@@ -119,13 +119,16 @@ class Pipeline(private val cfg: PipelineConfig) {
                 WatermarkStore.finishRun(oracleConn, t, lastWm, totalLoaded)
                 oracleConn.commit()
                 log.info("[{}] OK: total_loaded={}, total_merged={}, new_wm={}", t, totalLoaded, totalMerged, lastWm)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 runCatching { oracleConn.rollback() }
-                OracleDs.getConnection().use { failConn ->
-                    failConn.autoCommit = true
-                    WatermarkStore.failRun(failConn, t, e.message ?: "unknown error")
-                }
+                runCatching {
+                    OracleDs.getConnection().use { failConn ->
+                        failConn.autoCommit = true
+                        WatermarkStore.failRun(failConn, t, e.message ?: "unknown error")
+                    }
+                }.onFailure { log.warn("[{}] Failed to record FAILED status: {}", t, it.message) }
                 log.error("[{}] FAILED: {}", t, e.message, e)
+                if (e is Error) throw e
             }
         }
         MDC.remove("target")

@@ -53,12 +53,19 @@ object StagingLoader {
             target.sourceQuery
         }
 
-        // 4. Read from source
-        log.info("[{}] Reading from source (wm={}, lastKey={}, pageSize={})", t, wm, lastKeyValue, target.pageSize ?: "unlimited")
-        val rows = mutableListOf<Array<Any?>>()
+        // 4-6. Stream source → staging (no intermediate buffering)
+        log.info("[{}] Streaming from source (wm={}, lastKey={}, pageSize={})", t, wm, lastKeyValue, target.pageSize ?: "unlimited")
         val keyColIdx = target.columns.indexOf(keyCol)
-        val startRead = System.currentTimeMillis()
+        val colCount = target.columns.size
+        val placeholders = target.columns.joinToString(", ") { "?" }
+        val insertSql = "INSERT /*+ APPEND_VALUES */ INTO ${target.stagingTable} (${target.columns.joinToString(", ")}) VALUES ($placeholders)"
+
+        val startStream = System.currentTimeMillis()
+        var count = 0L
+        var newLastKey: String? = null
+
         sourceConn.prepareStatement(query).use { srcPs ->
+            srcPs.fetchSize = BATCH_SIZE
             var paramIdx = 1
             srcPs.setString(paramIdx++, wm)
             if (target.pageSize != null && lastKeyValue != null) {
@@ -66,45 +73,29 @@ object StagingLoader {
                 srcPs.setString(paramIdx++, lastKeyValue)
             }
             srcPs.executeQuery().use { rs ->
-                val colCount = target.columns.size
-                while (rs.next()) {
-                    val row = Array<Any?>(colCount) { i -> rs.getObject(i + 1) }
-                    rows.add(row)
-                }
-            }
-        }
-        val readTime = System.currentTimeMillis() - startRead
-        log.info("[{}] Source: {} rows read in {}ms", t, rows.size, readTime)
-
-        if (rows.isEmpty()) return LoadResult(0, lastWm, lastKeyValue)
-
-        // 5. Capture last key value
-        val newLastKey = rows.last()[keyColIdx]?.toString()
-
-        // 6. Insert into staging
-        log.info("[{}] Inserting {} rows into {}", t, rows.size, target.stagingTable)
-        val placeholders = target.columns.joinToString(", ") { "?" }
-        val insertSql = "INSERT /*+ APPEND_VALUES */ INTO ${target.stagingTable} (${target.columns.joinToString(", ")}) VALUES ($placeholders)"
-        val startInsert = System.currentTimeMillis()
-        oracleConn.prepareStatement(insertSql).use { insPs ->
-            var inserted = 0L
-            for (row in rows) {
-                for (i in row.indices) {
-                    insPs.setObject(i + 1, row[i])
-                }
-                insPs.addBatch()
-                inserted++
-                if (inserted % BATCH_SIZE == 0L) {
-                    insPs.executeBatch()
+                oracleConn.prepareStatement(insertSql).use { insPs ->
+                    while (rs.next()) {
+                        for (i in 0 until colCount) {
+                            insPs.setObject(i + 1, rs.getObject(i + 1))
+                        }
+                        newLastKey = rs.getObject(keyColIdx + 1)?.toString()
+                        insPs.addBatch()
+                        count++
+                        if (count % BATCH_SIZE == 0L) {
+                            insPs.executeBatch()
+                            oracleConn.commit()
+                            log.info("[{}] Staged {} rows", t, count)
+                        }
+                    }
+                    if (count % BATCH_SIZE != 0L) insPs.executeBatch()
                     oracleConn.commit()
-                    log.info("[{}] Inserted {} / {} rows", t, inserted, rows.size)
                 }
             }
-            if (inserted % BATCH_SIZE != 0L) insPs.executeBatch()
-            oracleConn.commit()
         }
-        val insertTime = System.currentTimeMillis() - startInsert
-        log.info("[{}] Inserted {} rows in {}ms", t, rows.size, insertTime)
+        val streamTime = System.currentTimeMillis() - startStream
+        log.info("[{}] Source: {} rows read+staged in {}ms", t, count, streamTime)
+
+        if (count == 0L) return LoadResult(0, lastWm, lastKeyValue)
 
         // 7. Get new watermark
         val newWm = oracleConn.createStatement().use { st ->
@@ -112,6 +103,6 @@ object StagingLoader {
                 if (wmRs.next()) wmRs.getString(1) else null
             }
         }
-        return LoadResult(rows.size.toLong(), newWm ?: lastWm, newLastKey)
+        return LoadResult(count, newWm ?: lastWm, newLastKey)
     }
 }
