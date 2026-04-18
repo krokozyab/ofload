@@ -1,6 +1,7 @@
 package app.etl
 
 import app.config.TargetConfig
+import app.metrics.Metrics
 import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.time.LocalDateTime
@@ -50,7 +51,99 @@ object StagingLoader {
      * the watermark predicate gets injected on each page. Replaced with `wmCol > ?`
      * on the first page and a tuple-seek expression on subsequent pages.
      */
-    private const val WM_MARKER = "/*WM*/"
+    internal const val WM_MARKER = "/*WM*/"
+
+    /**
+     * Upper bound on how long one page fetch (one entire ResultSet consumption across
+     * the driver's internal OFFSET/FETCH NEXT pagination AND its retry loop) is
+     * allowed to take before the source call is aborted.
+     *
+     * Honoured by ofjdbc's [java.sql.Statement.setQueryTimeout]: the driver records
+     * a deadline at `executeQuery()` and re-checks it before every HTTP round-trip
+     * plus every retry backoff (`PaginatedResultSet.fetchPageXml`). Exceeding it
+     * raises `SQLTimeoutException`, which propagates to [Pipeline.runTarget], marks
+     * the run FAILED, and releases the [app.db.SourceDs] singleton mutex so other
+     * targets can proceed.
+     *
+     * The default (600 s = 10 min) is deliberately above ofjdbc's per-request read
+     * timeout (120 s) × retry attempts (3) + exponential backoff (≤30 s), so the
+     * driver's own timeouts fire first on individual round-trips and retries work
+     * normally. Our cap only triggers if the overall page fetch becomes pathological.
+     */
+    private val SOURCE_QUERY_TIMEOUT_SECONDS: Int =
+        System.getenv("SOURCE_QUERY_TIMEOUT_SECONDS")?.toIntOrNull() ?: 600
+
+    /**
+     * Build the paginated SELECT that will be sent to the source driver.
+     *
+     * Pure function, no DB access — lives outside [load] so unit tests can exercise
+     * every branch without a source connection. Injects the appropriate watermark
+     * predicate into [app.config.TargetConfig.sourceQuery] at [WM_MARKER] and appends
+     * `ORDER BY` when the target is paginated.
+     *
+     * @param lastKeyValues null → first-page (scalar `wm > ?`); non-null → seek form.
+     */
+    internal fun buildSourceQuery(target: TargetConfig, lastKeyValues: List<String?>?): String {
+        require(target.sourceQuery.contains(WM_MARKER)) {
+            "targets.json: sourceQuery for '${target.name}' must contain $WM_MARKER where the watermark predicate should be injected"
+        }
+        val keyColsCsv = target.keyColumns.joinToString(", ")
+        val keyPlaceholders = target.keyColumns.joinToString(", ") { "?" }
+        val firstPagePredicate = "${target.watermarkColumn} > ?"
+        // Scalar form for single-column keys — the row-value form `(col) > (?)` is
+        // semantically equivalent in Oracle but observed to confuse the BI Publisher
+        // SQL parser through ofjdbc's RP_ARB.xdo transport. Use scalar when we can;
+        // tuple is reserved for genuinely composite keys where it's required.
+        val seekPredicate = if (target.keyColumns.size == 1) {
+            val k = target.keyColumns[0]
+            "(${target.watermarkColumn} > ? OR (${target.watermarkColumn} = ? AND $k > ?))"
+        } else {
+            "(${target.watermarkColumn} > ? OR (${target.watermarkColumn} = ? AND ($keyColsCsv) > ($keyPlaceholders)))"
+        }
+        return if (target.pageSize != null) {
+            val predicate = if (lastKeyValues != null) seekPredicate else firstPagePredicate
+            val baseQuery = target.sourceQuery.replace(WM_MARKER, predicate)
+            "$baseQuery ORDER BY ${target.watermarkColumn}, $keyColsCsv"
+        } else {
+            target.sourceQuery.replace(WM_MARKER, firstPagePredicate)
+        }
+    }
+
+    /**
+     * Compute the effective watermark to bind into the source query for the current page.
+     *
+     * Pure function. On the first page of a run with [TargetConfig.lookbackMinutes] set,
+     * subtract that many minutes from the persisted watermark to re-scan recently-updated
+     * rows (guards against source-side clock skew and late-arriving updates). Second+
+     * pages within the same run use the raw watermark — we've already scanned the
+     * lookback window. First-ever run (lastWm=null) falls back to [TargetConfig.initialWm].
+     */
+    internal fun computeEffectiveWm(target: TargetConfig, lastWm: String?, lastKeyValues: List<String?>?): String {
+        val rawWm = lastWm ?: target.initialWm
+        return if (target.lookbackMinutes != null && lastKeyValues == null && lastWm != null) {
+            val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss[.SSSSSS][.SSSSS][.SSSS][.SSS][.SS][.S]")
+            val adjusted = LocalDateTime.parse(rawWm, fmt).minusMinutes(target.lookbackMinutes)
+            adjusted.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+        } else {
+            rawWm
+        }
+    }
+
+    /**
+     * Assemble the ordered list of bind values for the query returned by [buildSourceQuery].
+     *
+     * First page: `[wm]` — one bind for the scalar `wm > ?` predicate.
+     * Seek page: `[wm, wm, key1, key2, ...]` — two `?`s for the watermark comparison and
+     * one `?` per key column in the tuple comparison.
+     */
+    internal fun buildBindParams(target: TargetConfig, wm: String, lastKeyValues: List<String?>?): List<String?> {
+        val params = mutableListOf<String?>(wm)
+        if (target.pageSize != null && lastKeyValues != null) {
+            params.add(wm)
+            params.addAll(lastKeyValues)
+        }
+        return params
+    }
 
     /**
      * Load one page of data from source into staging.
@@ -82,61 +175,17 @@ object StagingLoader {
             }
         }
 
-        // 3. Resolve the effective watermark for this page.
-        //    On the very first page of a run, apply optional lookbackMinutes — subtract
-        //    that many minutes from the persisted watermark so we re-scan recently-updated
-        //    rows (guards against source-side clock skew and late-arriving updates).
-        //    Subsequent pages of the same run use the raw value — we've already scanned.
-        val rawWm = lastWm ?: target.initialWm
-        val wm = if (target.lookbackMinutes != null && lastKeyValues == null && lastWm != null) {
-            val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss[.SSSSSS][.SSSSS][.SSSS][.SSS][.SS][.S]")
-            val adjusted = LocalDateTime.parse(rawWm, fmt).minusMinutes(target.lookbackMinutes)
-            adjusted.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-                .also { log.info("[{}] Lookback {}min: wm adjusted {} -> {}", t, target.lookbackMinutes, rawWm, it) }
-        } else {
-            rawWm
+        // 3. Resolve the effective watermark for this page (handles lookback on 1st page).
+        val wm = computeEffectiveWm(target, lastWm, lastKeyValues)
+        if (target.lookbackMinutes != null && lastKeyValues == null && lastWm != null && wm != lastWm) {
+            log.info("[{}] Lookback {}min: wm adjusted {} -> {}", t, target.lookbackMinutes, lastWm, wm)
         }
 
-        // 4. Build the paginated query using tuple comparison on (wm, key1, key2, ...).
-        //    Rationale: the naive `wm > ?` boundary loses rows that share the same watermark
-        //    as the last row of the previous page. Tuple pagination — ORDER BY (wm, keys...)
-        //    + WHERE (wm > ? OR (wm = ? AND (keys) > (?,?,...))) — is a strict-increase
-        //    seek that works correctly even for composite keys and watermark ties.
-        //
-        //    The sourceQuery carries an explicit `/*WM*/` marker where the watermark
-        //    predicate should go — the pipeline substitutes it per-page. This is more
-        //    robust than pattern-matching `wmCol > ?` in free SQL (which silently breaks
-        //    on aliases, extra spaces, additional WHERE clauses, etc.).
-        require(target.sourceQuery.contains(WM_MARKER)) {
-            "targets.json: sourceQuery for '${target.name}' must contain $WM_MARKER where the watermark predicate should be injected"
-        }
-        val keyColsCsv = target.keyColumns.joinToString(", ")
-        val keyPlaceholders = target.keyColumns.joinToString(", ") { "?" }
-        val firstPagePredicate = "${target.watermarkColumn} > ?"
-        // Scalar form for single-column keys — the row-value form `(col) > (?)` is
-        // semantically equivalent in Oracle but observed to confuse the BI Publisher
-        // SQL parser through ofjdbc's RP_ARB.xdo transport. Use scalar when we can;
-        // tuple is reserved for genuinely composite keys where it's required.
-        val seekPredicate = if (target.keyColumns.size == 1) {
-            val k = target.keyColumns[0]
-            "(${target.watermarkColumn} > ? OR (${target.watermarkColumn} = ? AND $k > ?))"
-        } else {
-            "(${target.watermarkColumn} > ? OR (${target.watermarkColumn} = ? AND ($keyColsCsv) > ($keyPlaceholders)))"
-        }
-        // Pagination is delegated to the ofjdbc driver's PaginatedResultSet, which
-        // automatically appends `OFFSET x ROWS FETCH NEXT y ROWS ONLY` to any SELECT
-        // that doesn't already contain ROWNUM/OFFSET/FETCH. Adding our own ROWNUM
-        // wrapper or FETCH clause here would make the driver fall back to sending
-        // the un-rewritten SQL on every page — producing duplicate rows because
-        // each page issues the same request without OFFSET progression.
-        // See PaginatedResultSet.rewriteQueryForPagination in the ofjdbc source.
-        val query = if (target.pageSize != null) {
-            val predicate = if (lastKeyValues != null) seekPredicate else firstPagePredicate
-            val baseQuery = target.sourceQuery.replace(WM_MARKER, predicate)
-            "$baseQuery ORDER BY ${target.watermarkColumn}, $keyColsCsv"
-        } else {
-            target.sourceQuery.replace(WM_MARKER, firstPagePredicate)
-        }
+        // 4. Build the paginated query. Pagination is delegated to the ofjdbc driver's
+        //    PaginatedResultSet, which appends `OFFSET x ROWS FETCH NEXT y ROWS ONLY`
+        //    to any SELECT that doesn't already contain ROWNUM/OFFSET/FETCH. See
+        //    PaginatedResultSet.rewriteQueryForPagination in the ofjdbc source.
+        val query = buildSourceQuery(target, lastKeyValues)
 
         // 5. Stream source → staging without an intermediate buffer.
         //    Each source row is pushed directly into the staging PreparedStatement's batch;
@@ -166,11 +215,12 @@ object StagingLoader {
             // JDBC-level row limit. Row cap is enforced by the Java-side break
             // below; the driver's auto-pagination lets us close the ResultSet
             // cleanly when we've consumed enough.
-            var paramIdx = 1
-            srcPs.setString(paramIdx++, wm)
-            if (target.pageSize != null && lastKeyValues != null) {
-                srcPs.setString(paramIdx++, wm)
-                for (v in lastKeyValues) srcPs.setString(paramIdx++, v)
+            // Overall ceiling on one page fetch — the driver's own read-timeout +
+            // retry logic sit underneath this and will handle transient failures;
+            // this only fires if the whole thing is genuinely pathological.
+            srcPs.queryTimeout = SOURCE_QUERY_TIMEOUT_SECONDS
+            buildBindParams(target, wm, lastKeyValues).forEachIndexed { i, v ->
+                srcPs.setString(i + 1, v)
             }
             srcPs.executeQuery().use { rs ->
                 // Use ResultSet metadata rather than a config column list — so the only
@@ -204,6 +254,12 @@ object StagingLoader {
             log.info("[{}] Page filled to pageSize={}; RS closed, next page will resume via seek predicate", t, target.pageSize)
         }
         log.info("[{}] Source: {} rows read+staged in {}ms", t, count, streamTime)
+
+        // Metrics: record page duration + rows staged. Zero-row pages still count —
+        // their duration is informative signal for "how fast does the source confirm
+        // there are no new rows".
+        Metrics.pageTimer(t).record(java.time.Duration.ofMillis(streamTime))
+        if (count > 0) Metrics.rowsLoaded(t, count)
 
         if (count == 0L) return LoadResult(0, lastWm, lastKeyValues)
 

@@ -1,0 +1,12 @@
+# Schema migrations — applied in the order listed below at service startup.
+# One migration id per line. Lines starting with `#` and blank lines are ignored.
+#
+# To add a migration:
+#   1. Create `src/main/resources/migrations/<NNN>_<description>.sql` with ONE SQL
+#      statement (wrap multi-statement DDL in a PL/SQL BEGIN...END; block).
+#   2. Append its filename on a new line below.
+#   3. Migrations are idempotent if the file handles "already exists" errors —
+#      see 001_init_etl_watermark.sql for the canonical pattern.
+
+001_init_etl_watermark.sql
+002_typed_watermark_columns.sql

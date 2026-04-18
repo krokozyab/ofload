@@ -1,10 +1,12 @@
 package app
 
+import app.config.TargetsValidator
 import app.config.loadConfig
 import app.db.OracleDs
 import app.db.SourceDs
 import app.etl.Pipeline
 import app.etl.WatermarkStore
+import app.migrations.Migrator
 import app.server.ConfigHolder
 import app.server.RunManager
 import app.server.configureRoutes
@@ -29,9 +31,29 @@ fun main() {
     val config = loadConfig(configStream)
     log.info("Loaded {} target(s): {}", config.targets.size, config.targets.map { it.name })
 
+    // Fail-fast static validation — catches config mistakes that would otherwise
+    // only surface on the first row of the first run. Does NOT hit the DB here.
+    val validationErrors = TargetsValidator.validate(config)
+    if (validationErrors.isNotEmpty()) {
+        log.error("targets.json validation failed with {} error(s):", validationErrors.size)
+        validationErrors.forEach { e ->
+            log.error("  [{}] {}", e.target ?: "global", e.message)
+        }
+        error("Invalid targets.json — refusing to start (${validationErrors.size} error(s) logged above)")
+    }
+    log.info("targets.json validation passed")
+
     val configHolder = ConfigHolder(config)
     val pipeline = Pipeline(config)
     val runManager = RunManager(configHolder, pipeline)
+
+    // Apply pending schema migrations (system tables only — per-target DDL stays manual).
+    // Fatal on failure: if infrastructure SQL can't be applied, running the pipeline
+    // against a partially-migrated schema is worse than crashing early.
+    OracleDs.getConnection().use { conn ->
+        conn.autoCommit = false
+        Migrator.run(conn)
+    }
 
     // Reset stale RUNNING targets left by a previous crashed JVM.
     // If this fails the service still starts — the watermark layer is advisory

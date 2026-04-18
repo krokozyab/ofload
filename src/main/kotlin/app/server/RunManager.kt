@@ -5,6 +5,7 @@ import app.config.TargetConfig
 import app.db.OracleDs
 import app.etl.Pipeline
 import app.etl.WatermarkStore
+import app.metrics.Metrics
 import org.slf4j.LoggerFactory
 import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
@@ -41,13 +42,19 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
         0L, TimeUnit.MILLISECONDS,
         ArrayBlockingQueue<Runnable>(runnerQueueSize),
         ThreadPoolExecutor.AbortPolicy()
-    )
+    ).also { Metrics.registerPoolGauges("runner", it) }
 
     /**
      * Names of targets currently executing. Used as the concurrency lock that
      * prevents overlapping runs of the same target. Thread-safe (ConcurrentHashMap-backed set).
      */
     private val runningTargets = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * TTL cache for target-table row counts surfaced on `/status`. Refreshes happen
+     * on a background thread so slow COUNT(*) queries don't block the HTTP handler.
+     */
+    private val rowCountCache = TargetRowCountCache()
 
     /**
      * Non-blocking check for UI/status endpoints: is this target mid-run right now?
@@ -123,6 +130,7 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
             }
         } catch (e: RejectedExecutionException) {
             toRun.forEach { runningTargets.remove(it.name) }
+            Metrics.runnerRejection()
             throw e
         }
     }
@@ -136,17 +144,15 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
      * running/not-running so the operator can see what the process thinks is active.
      */
     fun getStatus(): StatusResponse {
-        val (watermarks, rowCounts) = try {
+        // Watermarks — fast single query, read synchronously. Row counts come from
+        // the TTL cache (never blocks; async background refresh absorbs latency).
+        val watermarks = try {
             OracleDs.getConnection().use { conn ->
-                val wms = WatermarkStore.readAll(conn)
-                val counts = configHolder.config.targets.associate { t ->
-                    t.name to countTargetRows(conn, t.targetTable)
-                }
-                wms to counts
+                WatermarkStore.readAll(conn, configHolder.config)
             }
         } catch (e: Exception) {
-            log.warn("Failed to read status: {}", e.message)
-            emptyList<app.server.WatermarkRow>() to emptyMap<String, Long?>()
+            log.warn("Failed to read watermarks for status: {}", e.message)
+            emptyList()
         }
         val wmByName = watermarks.associateBy { it.targetName }
 
@@ -155,27 +161,10 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
                 name = t.name,
                 running = t.name in runningTargets,
                 watermark = wmByName[t.name],
-                targetRowCount = rowCounts[t.name]
+                targetRowCount = rowCountCache.get(t.name, t.targetTable)
             )
         }
         return StatusResponse(targets)
-    }
-
-    /**
-     * Count rows in the target's final table. Cheap on modest datasets; may become
-     * expensive on multi-million-row targets — move to a cached background task if it
-     * ever shows up on /status timing. Returns null if the table doesn't exist yet or
-     * the query fails, so the UI can render a placeholder rather than error out.
-     */
-    private fun countTargetRows(conn: java.sql.Connection, tableName: String): Long? = try {
-        conn.createStatement().use { st ->
-            st.executeQuery("SELECT COUNT(*) FROM $tableName").use { rs ->
-                if (rs.next()) rs.getLong(1) else null
-            }
-        }
-    } catch (e: Exception) {
-        log.debug("Failed to count {}: {}", tableName, e.message)
-        null
     }
 
     /**
@@ -192,6 +181,7 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
             log.warn("Forcing shutdown, {} targets still running", runningTargets.size)
             executor.shutdownNow()
         }
+        rowCountCache.close()
         pipeline.shutdown()
     }
 
