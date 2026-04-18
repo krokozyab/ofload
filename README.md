@@ -7,7 +7,7 @@
 from **OIC, a cron job, Jenkins, Airflow, or anything else that speaks HTTP** —
 the service does streaming extraction, tuple-seek pagination, MERGE idempotency,
 watermark tracking, and per-target row-count bookkeeping. It's also the canonical
-reference implementation for [**ofjdbc**](https://github.com/sergey-rudenko-ba/ofjdbc),
+reference implementation for [**ofjdbc**](https://github.com/krokozyab/ofjdbc),
 the JDBC driver that turns any Fusion tenant into a queryable SQL source.
 
 The built-in dashboard exists for humans (ops, dev, demos). In production,
@@ -68,6 +68,12 @@ See [docs/why-ofjdbc.md](docs/why-ofjdbc.md) for the detailed comparison.
 ```bash
 git clone https://github.com/<you>/ofload.git
 cd ofload
+
+# Download the ofjdbc driver (not shipped here — too large for git):
+#   https://github.com/krokozyab/ofjdbc/releases
+# Save it as libs/orfujdbc-1.0-SNAPSHOT.jar
+mkdir -p libs && curl -L -o libs/orfujdbc-1.0-SNAPSHOT.jar \
+  https://github.com/krokozyab/ofjdbc/releases/download/<tag>/orfujdbc-1.0-SNAPSHOT.jar
 
 # Set up credentials (see docs/env-vars.md for the full list).
 export DB_USER=... DB_PASSWORD=... DB_CONNECT_STRING=...
@@ -199,5 +205,5 @@ TBD — see `LICENSE`.
 
 ## Credits
 
-Built on top of **[ofjdbc](https://github.com/sergey-rudenko-ba/ofjdbc)**.
+Built on top of **[ofjdbc](https://github.com/krokozyab/ofjdbc)**.
 If you find `ofload` useful, star that repo too.
