@@ -56,12 +56,27 @@ export TNS_ADMIN="/absolute/path/to/wallet/folder"  # directory with the unzippe
 # Source: Oracle Fusion via ofjdbc
 export SOURCE_DRIVER_CLASS="my.jdbc.wsdl_driver.WsdlDriver"
 export SOURCE_URL="jdbc:wsdl://your-fusion-host.oraclecloud.com"
-# For BASIC auth add:
-export SOURCE_USER="your.fusion.user"
-export SOURCE_PASSWORD="…"
-# For browser-based SSO leave SOURCE_USER/SOURCE_PASSWORD unset — the driver
-# will open a browser for first-time authentication.
+
+# Authentication mode — pick one:
+#
+# (a) BROWSER SSO — interactive, opens a browser on first use, caches the token
+#     (~55 min). Great for dev/demo, NOT suitable for unattended cron.
+export SOURCE_AUTH_TYPE="BROWSER"
+#
+# (b) BASIC auth — static user+password, works in headless environments.
+#     Use a dedicated Fusion service account in production.
+# export SOURCE_AUTH_TYPE="BASIC"
+# export SOURCE_USER="your.fusion.user"
+# export SOURCE_PASSWORD="…"
+#
+# (c) BEARER token — raw JWT in SOURCE_PASSWORD. Tokens expire in ~1 h with
+#     no auto-refresh; mostly useful for short-lived test harnesses.
+# export SOURCE_AUTH_TYPE="BEARER"
+# export SOURCE_PASSWORD="eyJhbGciOiJSUzI1Ni…"
 ```
+
+See [operations.md — Authentication modes](operations.md#authentication-modes)
+for the full decision matrix and production recommendations.
 
 The full env-var reference (including tuning knobs for pools, timeouts,
 prefetch, metrics TTLs) lives in [env-vars.md](env-vars.md).

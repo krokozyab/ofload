@@ -8,10 +8,12 @@
 | `DB_PASSWORD` | — (required) | ATP password |
 | `DB_CONNECT_STRING` | — (required) | TNS descriptor or connect string |
 | `TNS_ADMIN` | — (optional) | Directory containing wallet for mTLS; when set the URL includes `?TNS_ADMIN=…` |
-| `SOURCE_URL` | — (required) | Fusion JDBC URL |
-| `SOURCE_USER` | — (optional) | Fusion user |
-| `SOURCE_PASSWORD` | — (optional) | Fusion password |
-| `SOURCE_DRIVER_CLASS` | — (required) | ofjdbc driver class name |
+| `SOURCE_URL` | — (required) | Fusion JDBC URL (e.g. `jdbc:wsdl://your-host.oraclecloud.com`) |
+| `SOURCE_AUTH_TYPE` | — (optional) | One of `BROWSER`, `BASIC`, `BEARER`. Unset ⇒ driver falls back to its legacy BASIC-by-default branch (requires `SOURCE_USER`+`SOURCE_PASSWORD`). Set explicitly when you want SSO (`BROWSER`) or raw-token auth (`BEARER`). |
+| `SOURCE_USER` | conditional | Required for `BASIC` (and the legacy default). Unused for `BROWSER`/`BEARER`. |
+| `SOURCE_PASSWORD` | conditional | Password for `BASIC`, raw JWT for `BEARER`. Unused for `BROWSER`. |
+| `SOURCE_SSO_TIMEOUT` | `300` (driver default) | Seconds to wait for the browser SSO flow. Applies only when `SOURCE_AUTH_TYPE=BROWSER`. |
+| `SOURCE_DRIVER_CLASS` | — (required) | ofjdbc driver class name (`my.jdbc.wsdl_driver.WsdlDriver`) |
 | `SOURCE_QUERY_TIMEOUT_SECONDS` | `600` | Upper bound per page fetch (driver's per-request read timeout and retry logic work underneath this; see below) |
 | `PORT` | `8080` | HTTP port for dashboard/API |
 | `RUNNER_THREADS` | `4` | Concurrent HTTP `/run*` submissions accepted by `RunManager` |
