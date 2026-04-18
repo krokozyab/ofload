@@ -1,6 +1,24 @@
-# ofload
+<h1 align="center">ofload — Production Fusion → ATP ETL Service</h1>
 
-> **REST-triggered incremental ETL for Oracle Fusion — drop-in replacement for BI Publisher adapter calls in OIC, with a built-in UI for good measure.**
+<p align="center">
+  <strong>REST-triggered incremental ETL for Oracle Fusion — a code-first alternative to OIC batch integrations, built on <a href="https://github.com/krokozyab/ofjdbc">ofjdbc</a>.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/krokozyab/ofload/blob/master/LICENSE.md"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge&logo=mit" alt="MIT License"></a>
+  <a href="https://github.com/krokozyab/ofload/stargazers"><img src="https://img.shields.io/github/stars/krokozyab/ofload?style=for-the-badge" alt="Stars"></a>
+  <a href="https://github.com/krokozyab/ofjdbc"><img src="https://img.shields.io/badge/built%20on-ofjdbc-orange?style=for-the-badge" alt="Built on ofjdbc"></a>
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#calling-from-oic">Calling from OIC</a> ·
+  <a href="#features">Features</a> ·
+  <a href="docs/why-ofjdbc.md">Why ofjdbc</a> ·
+  <a href="docs/architecture.md">Architecture</a>
+</p>
+
+---
 
 `ofload` is a small HTTP service that copies data from **Oracle Fusion Cloud** into
 **Oracle Autonomous Database** on demand. Trigger a run with a single `POST /run`
@@ -197,7 +215,7 @@ published as a CI-friendly suite.
 
 ## License
 
-TBD — see `LICENSE`.
+[MIT](LICENSE.md) — free for commercial and non-commercial use.
 
 ## Credits
 
