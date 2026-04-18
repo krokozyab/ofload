@@ -1,0 +1,17 @@
+<configuration>
+    <!-- Text format for local development (default) -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{20} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Suppress noisy logging -->
+    <logger name="oracle" level="WARN" />
+    <logger name="org.eclipse.jetty" level="WARN" />
+    <logger name="io.javalin" level="INFO" />
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE" />
+    </root>
+</configuration>

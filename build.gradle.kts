@@ -2,6 +2,7 @@ plugins {
     kotlin("jvm") version "2.2.20"
     kotlin("plugin.serialization") version "2.2.20"
     application
+    id("com.gradleup.shadow") version "8.3.6"
 }
 
 group = "org.example"
@@ -19,6 +20,7 @@ dependencies {
     implementation("org.slf4j:slf4j-api:2.0.9")
     implementation("ch.qos.logback:logback-classic:1.4.14")
     implementation("net.logstash.logback:logstash-logback-encoder:7.4")
+    implementation("io.javalin:javalin:6.6.0")
     implementation(files("libs/orfujdbc-1.0-SNAPSHOT.jar"))
     testImplementation(kotlin("test"))
 }

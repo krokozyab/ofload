@@ -1,0 +1,20 @@
+CREATE TABLE STG_GL_FA_LINES (
+    JE_HEADER_ID            NUMBER,
+    JE_LINE_NUM             NUMBER,
+    PERIOD_NAME             VARCHAR2(15),
+    ASSET_NUMBER            VARCHAR2(30),
+    SUBLEDGER_ID            NUMBER,
+    DESCRIPTION             VARCHAR2(240),
+    ATTRIBUTE_CATEGORY_CODE VARCHAR2(30),
+    BOOK_TYPE_CODE          VARCHAR2(15),
+    AMOUNT                  NUMBER,
+    EVENT_ID                NUMBER,
+    PO_NUMBER               VARCHAR2(30),
+    INVOICE_NUMBER          VARCHAR2(50),
+    LEDGER_ID               NUMBER,
+    INV_AMOUNT              NUMBER,
+    SET_OF_BOOKS_ID         NUMBER,
+    DIST_TYPE               VARCHAR2(10),
+    POSTED_DATE             DATE,
+    LAST_UPDATE_DATE        TIMESTAMP
+);

@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>ETL Manager | ckh_dw Service</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                "error": "#ba1a1a",
+                "surface-container-lowest": "#ffffff",
+                "secondary-container": "#a0ecf7",
+                "on-surface-variant": "#59413d",
+                "outline": "#8c716c",
+                "on-secondary-container": "#126d77",
+                "tertiary-fixed-dim": "#ffb68f",
+                "on-background": "#1b1c1c",
+                "surface-tint": "#ac3323",
+                "primary-fixed-dim": "#ffb4a7",
+                "on-primary-fixed-variant": "#8b1a0e",
+                "surface-dim": "#dbd9d9",
+                "on-primary-container": "#fff6f5",
+                "primary-container": "#c74634",
+                "on-surface": "#1b1c1c",
+                "surface-container-low": "#f5f3f3",
+                "on-error-container": "#93000a",
+                "surface-container-highest": "#e4e2e2",
+                "on-tertiary-fixed-variant": "#773200",
+                "on-tertiary-fixed": "#331100",
+                "secondary-fixed": "#a3effa",
+                "background": "#fbf9f8",
+                "on-tertiary": "#ffffff",
+                "surface-container-high": "#eae8e7",
+                "on-secondary-fixed-variant": "#004f57",
+                "on-secondary": "#ffffff",
+                "on-primary-fixed": "#400100",
+                "tertiary-container": "#ba5409",
+                "error-container": "#ffdad6",
+                "inverse-on-surface": "#f2f0f0",
+                "primary-fixed": "#ffdad4",
+                "primary": "#a52e1f",
+                "secondary": "#076872",
+                "secondary-fixed-dim": "#87d2de",
+                "outline-variant": "#e0bfba",
+                "surface-variant": "#e4e2e2",
+                "tertiary": "#954000",
+                "surface-container": "#f0eded",
+                "surface-bright": "#fbf9f8",
+                "on-tertiary-container": "#fff7f4",
+                "on-error": "#ffffff",
+                "on-secondary-fixed": "#001f23",
+                "inverse-primary": "#ffb4a7",
+                "inverse-surface": "#303030",
+                "tertiary-fixed": "#ffdbca",
+                "on-primary": "#ffffff",
+                "surface": "#fbf9f8"
+              },
+              "borderRadius": {
+                "DEFAULT": "0.125rem",
+                "lg": "0.25rem",
+                "xl": "0.5rem",
+                "full": "0.75rem"
+              },
+              "fontFamily": {
+                "headline": ["Manrope"],
+                "body": ["Inter"],
+                "label": ["Inter"]
+              }
+            },
+          },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body { font-family: 'Inter', sans-serif; }
+        .font-headline { font-family: 'Manrope', sans-serif; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f5f3f3; }
+        ::-webkit-scrollbar-thumb { background: #e0bfba; border-radius: 4px; }
+        .no-border-shadow { box-shadow: 0 12px 32px -4px rgba(140, 113, 108, 0.12); }
+    </style>
+</head>
+<body class="bg-background text-on-background min-h-screen">
+<!-- Sidebar (Shared Component: SideNavBar) -->
+<aside class="flex flex-col fixed left-0 top-0 h-full py-6 px-4 z-50 bg-[#f5f3f3] dark:bg-stone-900 h-screen w-64 border-none shadow-[0_4px_20px_-4px_rgba(140,113,108,0.08)]">
+<div class="mb-8 px-2">
+<h1 class="font-['Manrope'] font-bold text-[#a52e1f] text-xl">ETL Manager</h1>
+<p class="text-on-surface-variant text-xs opacity-70">Instance: Production</p>
+</div>
+<nav class="flex-1 flex flex-col gap-1">
+<a class="flex items-center gap-3 px-4 py-3 bg-[#ffffff] dark:bg-stone-800 text-[#a52e1f] dark:text-[#c74634] font-bold rounded-lg shadow-sm" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+<span class="font-['Inter'] text-sm">Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-[#59413d] dark:text-stone-400 hover:text-[#a52e1f] hover:bg-[#e4e2e2] dark:hover:bg-stone-800 transition-all duration-200 rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="account_tree">account_tree</span>
+<span class="font-['Inter'] text-sm">Pipelines</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-[#59413d] dark:text-stone-400 hover:text-[#a52e1f] hover:bg-[#e4e2e2] dark:hover:bg-stone-800 transition-all duration-200 rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="database">database</span>
+<span class="font-['Inter'] text-sm">Data Sources</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-[#59413d] dark:text-stone-400 hover:text-[#a52e1f] hover:bg-[#e4e2e2] dark:hover:bg-stone-800 transition-all duration-200 rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="calendar_today">calendar_today</span>
+<span class="font-['Inter'] text-sm">Schedules</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-[#59413d] dark:text-stone-400 hover:text-[#a52e1f] hover:bg-[#e4e2e2] dark:hover:bg-stone-800 transition-all duration-200 rounded-lg" href="#">
+<span class="material-symbols-outlined" data-icon="list_alt">list_alt</span>
+<span class="font-['Inter'] text-sm">Logs</span>
+</a>
+</nav>
+<div class="mt-auto px-2">
+<button class="w-full py-3 bg-gradient-to-br from-primary to-primary-container text-white rounded-lg font-semibold flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-transform">
+<span class="material-symbols-outlined" data-icon="add_circle">add_circle</span>
+                New Pipeline
+            </button>
+</div>
+</aside>
+<!-- Main Canvas -->
+<main class="ml-64 flex flex-col min-h-screen">
+<!-- Header (Shared Component: TopAppBar + User Requirements) -->
+<header class="flex justify-between items-center px-8 h-16 w-full z-40 bg-[#fbf9f8] dark:bg-stone-950 sticky top-0 shadow-sm">
+<div class="flex items-center gap-4">
+<div class="text-lg font-['Manrope'] font-bold text-[#a52e1f] dark:text-[#c74634]">ckh_dw Service</div>
+<div class="h-4 w-px bg-outline-variant opacity-30"></div>
+<div class="flex items-center gap-2 px-3 py-1 bg-surface-container-low rounded-full">
+<span class="w-2 h-2 rounded-full bg-green-500"></span>
+<span class="text-xs font-medium text-on-surface-variant">Connected</span>
+</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-3 bg-surface-container-high rounded-lg p-1">
+<span class="text-[10px] uppercase tracking-wider font-bold text-on-surface-variant px-2">Auto-refresh</span>
+<div class="flex">
+<button class="px-3 py-1 text-xs font-semibold bg-surface-container-lowest text-primary rounded-md shadow-sm">Off</button>
+<button class="px-3 py-1 text-xs font-medium text-on-surface-variant hover:text-primary">15s</button>
+<button class="px-3 py-1 text-xs font-medium text-on-surface-variant hover:text-primary">30s</button>
+<button class="px-3 py-1 text-xs font-medium text-on-surface-variant hover:text-primary">60s</button>
+</div>
+</div>
+<div class="flex items-center gap-4 text-on-surface-variant">
+<button class="material-symbols-outlined hover:text-primary transition-colors" data-icon="check_circle">check_circle</button>
+<button class="material-symbols-outlined hover:text-primary transition-colors" data-icon="notifications">notifications</button>
+<button class="material-symbols-outlined hover:text-primary transition-colors" data-icon="settings">settings</button>
+<img alt="Profile" class="w-8 h-8 rounded-full border-2 border-primary-fixed" data-alt="professional portrait of a system administrator in a modern office environment with soft natural lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA3mxU25nTjBMv7Td9Bwvf1CwjgY5O2rNFok8CD4SvHLnjEr55UZJ6_zO7msAMrB1Z-CW5NW9J6J00d9XiaEcckpE6oFVJZEXwg6nHNMl3R6ieNmevDDpuUBpI4RhpdzMrlzxEWC4g0K72QSA9dZ0gAJZf-VMa55KicIlTO1rGKTVrIC0CoXuULZ4d3UHcUR78JhREPivG44W5lh3vnm0Ip_5YQBTchHK0l0eTq4Oz7NtYN987sDhzXJtc7vy7uvBlC5dT6TaD9-mxN"/>
+</div>
+</div>
+</header>
+<!-- Content Area -->
+<div class="p-8 max-w-7xl w-full mx-auto flex flex-col gap-10">
+<!-- Breadcrumbs -->
+<nav class="flex items-center gap-2 text-sm text-on-surface-variant mb-[-24px]">
+<span class="opacity-60">Services</span>
+<span class="material-symbols-outlined text-sm" data-icon="chevron_right">chevron_right</span>
+<span class="font-semibold text-primary">ckh_dw Dashboard</span>
+</nav>
+<!-- Section 1: Groups Overview -->
+<section>
+<div class="flex justify-between items-end mb-6">
+<div>
+<h2 class="text-3xl font-['Manrope'] font-extrabold text-on-surface tracking-tight">Groups Overview</h2>
+<p class="text-on-surface-variant opacity-70">Monitor and execute logical pipeline clusters.</p>
+</div>
+<button class="bg-gradient-to-br from-secondary to-secondary-container text-on-secondary px-6 py-2.5 rounded-lg font-bold flex items-center gap-2 shadow-md active:scale-95 transition-all">
+<span class="material-symbols-outlined" data-icon="play_arrow">play_arrow</span>
+                        Run All Groups
+                    </button>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+<!-- Card 1 -->
+<div class="bg-surface-container-lowest p-6 rounded-xl no-border-shadow flex flex-col gap-4 border-l-4 border-green-500 hover:translate-y-[-2px] transition-transform">
+<div class="flex justify-between items-start">
+<div>
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant opacity-60">Identifier</span>
+<h3 class="text-xl font-bold text-on-surface">Group 1</h3>
+</div>
+<span class="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-full flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-green-600"></span>
+                                OK
+                            </span>
+</div>
+<div class="flex items-center gap-2 text-on-surface-variant text-sm">
+<span class="material-symbols-outlined text-sm" data-icon="layers">layers</span>
+                            3 targets configured
+                        </div>
+<div class="mt-2 pt-4 border-t border-surface-container-low flex justify-between items-center">
+<span class="text-xs text-on-surface-variant">Last run: 12m ago</span>
+<button class="text-secondary font-bold text-sm flex items-center gap-1 hover:underline">
+<span class="material-symbols-outlined text-sm" data-icon="play_circle">play_circle</span>
+                                Run Group
+                            </button>
+</div>
+</div>
+<!-- Card 2 (Running State) -->
+<div class="bg-surface-container-lowest p-6 rounded-xl no-border-shadow flex flex-col gap-4 border-l-4 border-secondary hover:translate-y-[-2px] transition-transform">
+<div class="flex justify-between items-start">
+<div>
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant opacity-60">Identifier</span>
+<h3 class="text-xl font-bold text-on-surface">Group 2</h3>
+</div>
+<span class="px-2.5 py-1 bg-secondary-container text-on-secondary-container text-xs font-bold rounded-full flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse"></span>
+                                Running
+                            </span>
+</div>
+<div class="flex items-center gap-2 text-on-surface-variant text-sm">
+<span class="material-symbols-outlined text-sm" data-icon="layers">layers</span>
+                            5 targets configured
+                        </div>
+<div class="mt-2 pt-4 border-t border-surface-container-low flex justify-between items-center">
+<span class="text-xs text-on-surface-variant">Progress: 68%</span>
+<button class="text-on-surface-variant font-bold text-sm flex items-center gap-1 opacity-50 cursor-not-allowed">
+<span class="material-symbols-outlined text-sm" data-icon="stop_circle">stop_circle</span>
+                                Cancel
+                            </button>
+</div>
+</div>
+<!-- Card 3 (Failed State) -->
+<div class="bg-surface-container-lowest p-6 rounded-xl no-border-shadow flex flex-col gap-4 border-l-4 border-error hover:translate-y-[-2px] transition-transform">
+<div class="flex justify-between items-start">
+<div>
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant opacity-60">Identifier</span>
+<h3 class="text-xl font-bold text-on-surface">Group 3</h3>
+</div>
+<span class="px-2.5 py-1 bg-error-container text-on-error-container text-xs font-bold rounded-full flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-error"></span>
+                                Failed
+                            </span>
+</div>
+<div class="flex items-center gap-2 text-on-surface-variant text-sm">
+<span class="material-symbols-outlined text-sm" data-icon="layers">layers</span>
+                            8 targets configured
+                        </div>
+<div class="mt-2 pt-4 border-t border-surface-container-low flex justify-between items-center">
+<span class="text-xs text-error font-medium">Failed 2h ago</span>
+<button class="text-primary font-bold text-sm flex items-center gap-1 hover:underline">
+<span class="material-symbols-outlined text-sm" data-icon="refresh">refresh</span>
+                                Retry Group
+                            </button>
+</div>
+</div>
+</div>
+</section>
+<!-- Section 2: Targets Table -->
+<section class="flex flex-col gap-6">
+<div class="flex items-end justify-between">
+<div>
+<h2 class="text-2xl font-['Manrope'] font-bold text-on-surface">Targets Pipeline</h2>
+<p class="text-on-surface-variant opacity-70">Granular view of all data synchronization targets.</p>
+</div>
+<div class="flex gap-2">
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant opacity-60" data-icon="search">search</span>
+<input class="bg-surface-container-high border-none rounded-lg pl-10 pr-4 py-2 text-sm focus:ring-2 focus:ring-primary/20 w-64" placeholder="Filter targets..." type="text"/>
+</div>
+<button class="p-2 bg-surface-container-high rounded-lg text-on-surface-variant hover:bg-surface-container-highest transition-colors">
+<span class="material-symbols-outlined" data-icon="filter_list">filter_list</span>
+</button>
+</div>
+</div>
+<div class="bg-surface-container-lowest rounded-xl no-border-shadow overflow-hidden">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container-low text-[10px] uppercase tracking-widest font-bold text-on-surface-variant">
+<th class="px-6 py-4">Target</th>
+<th class="px-4 py-4">Group</th>
+<th class="px-4 py-4">Status</th>
+<th class="px-4 py-4 text-right">Rows Loaded</th>
+<th class="px-4 py-4">Last WM</th>
+<th class="px-4 py-4">Duration</th>
+<th class="px-4 py-4">Last Run</th>
+<th class="px-6 py-4 text-center">Actions</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-surface-container-low text-sm">
+<!-- OK Row -->
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-5 font-semibold text-on-surface">gl_je_headers</td>
+<td class="px-4 py-5">
+<span class="bg-surface-container-high px-2 py-0.5 rounded text-[10px] font-bold text-on-surface-variant">Group 1</span>
+</td>
+<td class="px-4 py-5">
+<span class="px-2 py-1 bg-green-50 text-green-700 text-[11px] font-bold rounded-full">OK</span>
+</td>
+<td class="px-4 py-5 text-right font-mono text-xs">1,245,600</td>
+<td class="px-4 py-5 text-on-surface-variant text-xs">2023-11-20 14:00:00</td>
+<td class="px-4 py-5 text-on-surface-variant">4m 22s</td>
+<td class="px-4 py-5 text-on-surface-variant italic">12m ago</td>
+<td class="px-6 py-5 text-center">
+<button class="bg-secondary/10 text-secondary px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-secondary hover:text-white transition-all">Run</button>
+</td>
+</tr>
+<!-- Running Row -->
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-5 font-semibold text-on-surface">ap_invoices_all</td>
+<td class="px-4 py-5">
+<span class="bg-surface-container-high px-2 py-0.5 rounded text-[10px] font-bold text-on-surface-variant">Group 2</span>
+</td>
+<td class="px-4 py-5">
+<span class="px-2 py-1 bg-secondary-container text-on-secondary-container text-[11px] font-bold rounded-full flex items-center gap-1 w-fit">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse"></span>
+                                        RUNNING
+                                    </span>
+</td>
+<td class="px-4 py-5 text-right font-mono text-xs">84,200</td>
+<td class="px-4 py-5 text-on-surface-variant text-xs">2023-11-20 16:30:00</td>
+<td class="px-4 py-5 text-on-surface-variant">1m 10s...</td>
+<td class="px-4 py-5 text-on-surface-variant italic">Now</td>
+<td class="px-6 py-5 text-center">
+<button class="bg-on-surface-variant/10 text-on-surface-variant px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-error hover:text-white transition-all">Stop</button>
+</td>
+</tr>
+<!-- Failed Row -->
+<tr class="bg-error/5 hover:bg-error/10 transition-colors group">
+<td class="px-6 py-5 font-semibold text-on-surface flex items-center gap-2">
+                                    ar_cash_receipts
+                                    <span class="material-symbols-outlined text-error text-base cursor-help" data-icon="error" title="SQLException: Connection timeout exceeded">error</span>
+</td>
+<td class="px-4 py-5">
+<span class="bg-surface-container-high px-2 py-0.5 rounded text-[10px] font-bold text-on-surface-variant">Group 3</span>
+</td>
+<td class="px-4 py-5">
+<span class="px-2 py-1 bg-error-container text-on-error-container text-[11px] font-bold rounded-full">FAILED</span>
+</td>
+<td class="px-4 py-5 text-right font-mono text-xs">0</td>
+<td class="px-4 py-5 text-on-surface-variant text-xs">2023-11-20 12:00:00</td>
+<td class="px-4 py-5 text-on-surface-variant">0m 04s</td>
+<td class="px-4 py-5 text-on-surface-variant italic">2h ago</td>
+<td class="px-6 py-5 text-center">
+<button class="bg-primary text-on-primary px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm hover:scale-105 transition-all">Run</button>
+</td>
+</tr>
+<!-- OK Row 2 -->
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-5 font-semibold text-on-surface">po_headers_all</td>
+<td class="px-4 py-5">
+<span class="bg-surface-container-high px-2 py-0.5 rounded text-[10px] font-bold text-on-surface-variant">Group 1</span>
+</td>
+<td class="px-4 py-5">
+<span class="px-2 py-1 bg-green-50 text-green-700 text-[11px] font-bold rounded-full">OK</span>
+</td>
+<td class="px-4 py-5 text-right font-mono text-xs">450,112</td>
+<td class="px-4 py-5 text-on-surface-variant text-xs">2023-11-20 14:00:00</td>
+<td class="px-4 py-5 text-on-surface-variant">2m 45s</td>
+<td class="px-4 py-5 text-on-surface-variant italic">12m ago</td>
+<td class="px-6 py-5 text-center">
+<button class="bg-secondary/10 text-secondary px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-secondary hover:text-white transition-all">Run</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+<!-- Footer -->
+<footer class="mt-auto py-6 px-8 border-t border-surface-container-low text-on-surface-variant text-xs flex justify-between items-center opacity-60">
+<div>© 2023 ETL Manager Framework • v2.4.1-stable</div>
+<div class="flex gap-4">
+<a class="hover:underline" href="#">Documentation</a>
+<a class="hover:underline" href="#">Support</a>
+<a class="hover:underline" href="#">API Reference</a>
+</div>
+</footer>
+</main>
+<!-- Contextual FAB (Only on relevant screens) -->
+<button class="fixed bottom-8 right-8 w-14 h-14 bg-gradient-to-br from-primary to-primary-container text-white rounded-full shadow-2xl flex items-center justify-center hover:scale-110 active:scale-95 transition-all z-50">
+<span class="material-symbols-outlined text-3xl" data-icon="add">add</span>
+</button>
+</body></html>
