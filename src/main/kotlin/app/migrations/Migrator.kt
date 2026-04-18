@@ -116,10 +116,13 @@ object Migrator {
     /**
      * Load and execute a single migration, then insert its id into [TRACKING_TABLE].
      *
-     * Each file holds exactly one SQL statement (typically a PL/SQL `BEGIN ... END;`
-     * block that wraps the DDL with an exception handler for idempotence). Trailing
-     * semicolons are trimmed — they are optional in JDBC and would produce
-     * ORA-00911 if left on a bare DDL.
+     * Each file holds exactly one SQL statement. Two shapes are supported:
+     *   - **Plain DDL** (`CREATE TABLE …`, `ALTER TABLE …`) — Oracle JDBC rejects a
+     *     trailing `;` (ORA-00911 invalid character), so we strip it.
+     *   - **PL/SQL block** (`BEGIN … END;` or `DECLARE … BEGIN … END;`) — the `;`
+     *     after `END` is part of the PL/SQL grammar; stripping it raises PLS-00103.
+     *
+     * [looksLikePlSqlBlock] decides which by peeking at the first non-comment token.
      */
     private fun applyOne(conn: Connection, id: String) {
         val path = "$MIGRATIONS_DIR/$id"
@@ -127,15 +130,40 @@ object Migrator {
             ?.bufferedReader()?.use { it.readText() }
             ?: error("Migration file not found in classpath: $path")
 
-        val trimmed = sql.trim().trimEnd(';')
+        val trimmed = sql.trim()
+        val sqlToExecute = if (looksLikePlSqlBlock(trimmed)) trimmed else trimmed.trimEnd(';').trimEnd()
         log.info("Applying migration {}", id)
         val startMs = System.currentTimeMillis()
-        conn.createStatement().use { st -> st.execute(trimmed) }
+        conn.createStatement().use { st -> st.execute(sqlToExecute) }
         conn.prepareStatement("INSERT INTO $TRACKING_TABLE (ID) VALUES (?)").use { ps ->
             ps.setString(1, id)
             ps.executeUpdate()
         }
         conn.commit()
         log.info("Applied {} in {}ms", id, System.currentTimeMillis() - startMs)
+    }
+
+    /**
+     * True if the SQL (ignoring leading `--` line comments and `/* */` block
+     * comments) starts with a PL/SQL block keyword. Such statements require a
+     * trailing `;` after `END`; plain DDL doesn't.
+     */
+    private fun looksLikePlSqlBlock(sql: String): Boolean {
+        var s = sql.trimStart()
+        while (s.isNotEmpty()) {
+            when {
+                s.startsWith("--") -> {
+                    val nl = s.indexOf('\n')
+                    s = if (nl < 0) "" else s.substring(nl + 1).trimStart()
+                }
+                s.startsWith("/*") -> {
+                    val end = s.indexOf("*/")
+                    s = if (end < 0) "" else s.substring(end + 2).trimStart()
+                }
+                else -> break
+            }
+        }
+        val upper = s.uppercase()
+        return upper.startsWith("BEGIN") || upper.startsWith("DECLARE")
     }
 }
