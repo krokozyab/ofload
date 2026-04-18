@@ -1,6 +1,7 @@
 package app.server
 
 import app.db.OracleDs
+import app.metrics.Metrics
 import io.javalin.Javalin
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
@@ -149,6 +150,15 @@ fun configureRoutes(app: Javalin, runManager: RunManager, configHolder: ConfigHo
                 db = if (dbOk) "connected" else "error",
                 error = reason.trimEnd(' ', ';'))))
         }
+    }
+
+    /**
+     * GET /metrics — Prometheus scrape endpoint. Returns the text-format snapshot of
+     * all counters, timers and gauges registered via [Metrics]. Designed to be
+     * polled by a Prometheus server or compatible scraper every 15–60s.
+     */
+    app.get("/metrics") { ctx ->
+        ctx.contentType("text/plain; version=0.0.4; charset=utf-8").result(Metrics.scrape())
     }
 
     /** GET /health — backward-compat alias of /ready (existing dashboard polls /health). */

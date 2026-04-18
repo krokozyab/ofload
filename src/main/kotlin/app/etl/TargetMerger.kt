@@ -1,6 +1,7 @@
 package app.etl
 
 import app.config.TargetConfig
+import app.metrics.Metrics
 import java.sql.Connection
 
 /**
@@ -15,8 +16,14 @@ object TargetMerger {
     /**
      * Run the configured MERGE and return the number of affected rows.
      * The row count is advisory (Oracle counts both inserted and updated rows
-     * together) and used only for logging in [Pipeline].
+     * together) and used only for logging in [Pipeline]. Records both the merge
+     * duration and row count into Metrics.
      */
-    fun merge(conn: Connection, target: TargetConfig): Int =
-        conn.createStatement().use { it.executeUpdate(target.targetMerge) }
+    fun merge(conn: Connection, target: TargetConfig): Int {
+        val rows = Metrics.mergeTimer(target.name).recordCallable {
+            conn.createStatement().use { it.executeUpdate(target.targetMerge) }
+        } ?: 0
+        if (rows > 0) Metrics.rowsMerged(target.name, rows.toLong())
+        return rows
+    }
 }

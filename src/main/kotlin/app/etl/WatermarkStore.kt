@@ -1,9 +1,15 @@
 package app.etl
 
+import app.config.PipelineConfig
+import app.config.TargetConfig
 import app.server.WatermarkRow
 import org.slf4j.LoggerFactory
 import java.sql.Connection
+import java.sql.PreparedStatement
 import java.sql.Timestamp
+import java.sql.Types
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.Calendar
 import java.util.TimeZone
 
@@ -11,23 +17,39 @@ import java.util.TimeZone
  * CRUD on the ETL_WATERMARK table — the source of truth for incremental-load state.
  *
  * Schema is split into three independent sections:
- *   * Progress cursor: `LAST_WM` (advances per-page within a run).
- *   * Current run:     `CURRENT_RUN_STARTED`, `CURRENT_RUN_ID` (NULL when idle).
+ *   * Progress cursor: `LAST_WM_TIMESTAMP` (typed TIMESTAMP) or `LAST_WM_NUMBER`
+ *     (typed NUMBER), chosen per target by [TargetConfig.watermarkType]. The legacy
+ *     VARCHAR2 `LAST_WM` column is still in the schema but ignored by this store.
+ *   * Current run:     `CURRENT_RUN_STARTED`, `CURRENT_RUN_ID`, `CURRENT_RUN_ROWS`
+ *     (all NULL/0 when idle).
  *   * Outcome history: `LAST_SUCCESS_*` and `LAST_FAILURE_*` (independent).
  *
  * State transitions are driven by [Pipeline.runTarget] at well-defined points:
- *   [beginRun] → N × [updateWatermark] → [finishRunOk]  — on the happy path
- *   [beginRun] → any point               → [failRun]    — on error
+ *   [beginRun] → N × [updateProgress] → [finishRunOk]  — on the happy path
+ *   [beginRun] → any point              → [failRun]    — on error
  *
- * This split removes the visual conflict the UI used to have where a RUNNING status
- * could sit next to stale LAST_RUN_FINISHED / ROWS_LOADED values from the previous run.
- *
- * Timezone policy: all timestamps are stored as UTC wall-clock via SYS_EXTRACT_UTC
- * and returned as ISO-8601 strings with a trailing 'Z'.
+ * Timezone policy: all run-lifecycle timestamps (CURRENT_RUN_STARTED,
+ * LAST_SUCCESS_FINISHED, LAST_FAILURE_FINISHED) are stored as UTC wall-clock via
+ * SYS_EXTRACT_UTC and returned as ISO-8601 strings with a trailing 'Z'. The target
+ * watermark itself (`LAST_WM_TIMESTAMP`) is stored verbatim — it represents the
+ * last source-side timestamp observed, in whatever timezone the source uses.
  */
 object WatermarkStore {
     private val log = LoggerFactory.getLogger(WatermarkStore::class.java)
     private val UTC = TimeZone.getTimeZone("UTC")
+
+    /** Canonical output format for TIMESTAMP watermarks (microsecond precision, matching Oracle TIMESTAMP(6)). */
+    private val TS_OUTPUT_FMT: DateTimeFormatter =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS")
+
+    /**
+     * Parse a TIMESTAMP watermark string coming from a source `SELECT MAX(wm) FROM STG`.
+     * Accepts the common Oracle formats up to 9 fractional digits — varies slightly
+     * depending on how the staging column and source NLS are configured.
+     */
+    private val TS_INPUT_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern(
+        "yyyy-MM-dd HH:mm:ss[.SSSSSSSSS][.SSSSSSSS][.SSSSSSS][.SSSSSS][.SSSSS][.SSSS][.SSS][.SS][.S]"
+    )
 
     /**
      * Serialise a JDBC Timestamp read with the UTC calendar into an ISO-8601 string
@@ -35,6 +57,49 @@ object WatermarkStore {
      * stable across JVMs and safe for `new Date(...)` on the JS side.
      */
     private fun Timestamp?.toIsoUtc(): String? = this?.toInstant()?.toString()
+
+    /**
+     * Pick the column that holds this target's current watermark. Typed-per-target
+     * so downstream SQL and reads stay correct even if different targets use
+     * different watermark kinds.
+     */
+    private fun watermarkColumnName(type: String): String = when (type) {
+        "TIMESTAMP" -> "LAST_WM_TIMESTAMP"
+        "NUMBER" -> "LAST_WM_NUMBER"
+        else -> error("Unsupported watermarkType: '$type' (expected 'TIMESTAMP' or 'NUMBER')")
+    }
+
+    /**
+     * Bind a watermark string into a PreparedStatement using the right JDBC type.
+     * For TIMESTAMP watermarks, parse the string with [TS_INPUT_FMT] first — fails
+     * loudly if the source returned an unexpected format, which is better than the
+     * old behaviour of silently storing it as VARCHAR.
+     */
+    private fun bindWatermark(ps: PreparedStatement, idx: Int, type: String, value: String?) {
+        if (value == null) {
+            ps.setNull(idx, if (type == "TIMESTAMP") Types.TIMESTAMP else Types.NUMERIC)
+            return
+        }
+        when (type) {
+            "TIMESTAMP" -> ps.setTimestamp(idx, Timestamp.valueOf(LocalDateTime.parse(value, TS_INPUT_FMT)))
+            "NUMBER" -> ps.setBigDecimal(idx, value.toBigDecimal())
+            else -> error("Unsupported watermarkType: '$type'")
+        }
+    }
+
+    /**
+     * Format a typed watermark value read from its column into the canonical string
+     * form that [Pipeline] / [StagingLoader] bind back into source queries.
+     */
+    private fun readWatermark(
+        type: String,
+        tsReader: (String) -> Timestamp?,
+        numReader: (String) -> java.math.BigDecimal?
+    ): String? = when (type) {
+        "TIMESTAMP" -> tsReader("LAST_WM_TIMESTAMP")?.toLocalDateTime()?.format(TS_OUTPUT_FMT)
+        "NUMBER" -> numReader("LAST_WM_NUMBER")?.toPlainString()
+        else -> null
+    }
 
     /**
      * On service startup, flip every target still marked as "running" (CURRENT_RUN_*
@@ -64,13 +129,20 @@ object WatermarkStore {
     }
 
     /**
-     * Load every watermark row for the /status endpoint. Timestamps are read with an
-     * explicit UTC calendar (so JDBC does not apply JVM-local TZ offset) and emitted
-     * as ISO-8601 strings ending in 'Z'.
+     * Load every watermark row for the /status endpoint. Timestamps in the outcome
+     * columns are read with an explicit UTC calendar (so JDBC does not apply JVM-local
+     * TZ offset) and emitted as ISO-8601 strings ending in 'Z'. The per-target
+     * watermark is coalesced from either [LAST_WM_TIMESTAMP] or [LAST_WM_NUMBER]
+     * depending on the target's declared `watermarkType` — passed in via [config].
+     *
+     * Rows whose target is not in the config (e.g. after a target was renamed) get
+     * `lastWm = null` rather than erroring — the UI can still render the row.
      */
-    fun readAll(conn: Connection): List<WatermarkRow> {
+    fun readAll(conn: Connection, config: PipelineConfig): List<WatermarkRow> {
+        val typeByName: Map<String, String> = config.targets.associate { it.name to it.watermarkType }
         val sql = """
-            SELECT TARGET_NAME, LAST_WM,
+            SELECT TARGET_NAME,
+                   LAST_WM_TIMESTAMP, LAST_WM_NUMBER,
                    CURRENT_RUN_STARTED, CURRENT_RUN_ID, CURRENT_RUN_ROWS,
                    LAST_SUCCESS_FINISHED, LAST_SUCCESS_ROWS, LAST_SUCCESS_DURATION_MS,
                    LAST_FAILURE_FINISHED, LAST_FAILURE_ERROR
@@ -82,10 +154,17 @@ object WatermarkStore {
                 // Fresh Calendar per invocation (Calendar is not thread-safe and getTimestamp mutates it).
                 val utcCal = Calendar.getInstance(UTC)
                 while (rs.next()) {
+                    val name = rs.getString("TARGET_NAME")
+                    val type = typeByName[name]
+                    val lastWm = if (type != null) {
+                        readWatermark(type,
+                            tsReader = { rs.getTimestamp(it) },
+                            numReader = { rs.getBigDecimal(it) })
+                    } else null
                     val durationMs = rs.getLong("LAST_SUCCESS_DURATION_MS").takeIf { !rs.wasNull() }
                     results.add(WatermarkRow(
-                        targetName = rs.getString("TARGET_NAME"),
-                        lastWm = rs.getString("LAST_WM"),
+                        targetName = name,
+                        lastWm = lastWm,
                         currentRunStarted = rs.getTimestamp("CURRENT_RUN_STARTED", utcCal).toIsoUtc(),
                         currentRunId = rs.getString("CURRENT_RUN_ID"),
                         currentRunRows = rs.getLong("CURRENT_RUN_ROWS"),
@@ -102,16 +181,22 @@ object WatermarkStore {
     }
 
     /**
-     * Read only the LAST_WM value for one target — the sole input [Pipeline] needs
-     * before starting a new run. Returns null when the target has never run yet;
-     * the caller falls back to [app.config.TargetConfig.initialWm].
+     * Read the stored watermark for one target in its canonical string form, ready to
+     * be bound into the source SELECT. Returns null when the target has never run yet;
+     * the caller falls back to [TargetConfig.initialWm].
      */
-    fun read(conn: Connection, targetName: String): String? {
-        val sql = "SELECT LAST_WM FROM ETL_WATERMARK WHERE TARGET_NAME = ?"
+    fun read(conn: Connection, target: TargetConfig): String? {
+        val col = watermarkColumnName(target.watermarkType)
+        val sql = "SELECT $col FROM ETL_WATERMARK WHERE TARGET_NAME = ?"
         conn.prepareStatement(sql).use { ps ->
-            ps.setString(1, targetName)
+            ps.setString(1, target.name)
             ps.executeQuery().use { rs ->
-                return if (rs.next()) rs.getString(1) else null
+                if (!rs.next()) return null
+                return when (target.watermarkType) {
+                    "TIMESTAMP" -> rs.getTimestamp(1)?.toLocalDateTime()?.format(TS_OUTPUT_FMT)
+                    "NUMBER" -> rs.getBigDecimal(1)?.toPlainString()
+                    else -> null
+                }
             }
         }
     }
@@ -151,24 +236,28 @@ object WatermarkStore {
     }
 
     /**
-     * Persist page progress — update LAST_WM and CURRENT_RUN_ROWS.
+     * Persist page progress — update the typed watermark column (LAST_WM_TIMESTAMP or
+     * LAST_WM_NUMBER, by [TargetConfig.watermarkType]) and CURRENT_RUN_ROWS.
      *
      * Called after each successful page commit inside [Pipeline.runTarget]. Keeps the
      * resume cursor durable AND lets the dashboard show live row counts for the
-     * in-flight run, without touching any completion-outcome fields (so a crash
-     * between pages doesn't leave LAST_SUCCESS_* looking like a finished run).
+     * in-flight run, without touching any completion-outcome fields.
+     *
+     * The [newWm] value is validated at bind time — an unparseable string for a
+     * TIMESTAMP target fails the update loudly rather than being silently stored.
      */
-    fun updateProgress(conn: Connection, targetName: String, newWm: String?, totalRowsSoFar: Long) {
+    fun updateProgress(conn: Connection, target: TargetConfig, newWm: String?, totalRowsSoFar: Long) {
+        val col = watermarkColumnName(target.watermarkType)
         val sql = """
             UPDATE ETL_WATERMARK SET
-                LAST_WM = ?,
+                $col = ?,
                 CURRENT_RUN_ROWS = ?
             WHERE TARGET_NAME = ?
         """.trimIndent()
         conn.prepareStatement(sql).use { ps ->
-            ps.setString(1, newWm)
+            bindWatermark(ps, 1, target.watermarkType, newWm)
             ps.setLong(2, totalRowsSoFar)
-            ps.setString(3, targetName)
+            ps.setString(3, target.name)
             ps.executeUpdate()
         }
     }
@@ -177,9 +266,9 @@ object WatermarkStore {
      * Record a successful run completion.
      *
      * Clears CURRENT_RUN_* (target returns to idle) and writes LAST_SUCCESS_FINISHED
-     * + LAST_SUCCESS_ROWS. LAST_FAILURE_* is intentionally untouched — the outcome
-     * columns are independent, so the UI can still show "failed 3 days ago, recovered
-     * 2h ago" if it wants to render history.
+     * + LAST_SUCCESS_ROWS + LAST_SUCCESS_DURATION_MS. LAST_FAILURE_* is intentionally
+     * untouched — the outcome columns are independent, so the UI can still show
+     * "failed 3 days ago, recovered 2h ago" if it wants to render history.
      */
     fun finishRunOk(conn: Connection, targetName: String, rowsLoaded: Long, durationMs: Long) {
         val sql = """

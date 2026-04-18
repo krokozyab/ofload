@@ -21,6 +21,7 @@ dependencies {
     implementation("ch.qos.logback:logback-classic:1.4.14")
     implementation("net.logstash.logback:logstash-logback-encoder:7.4")
     implementation("io.javalin:javalin:6.6.0")
+    implementation("io.micrometer:micrometer-registry-prometheus:1.13.6")
     implementation(files("libs/orfujdbc-1.0-SNAPSHOT.jar"))
     testImplementation(kotlin("test"))
 }

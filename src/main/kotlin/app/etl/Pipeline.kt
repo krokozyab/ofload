@@ -4,6 +4,8 @@ import app.config.PipelineConfig
 import app.config.TargetConfig
 import app.db.OracleDs
 import app.db.SourceDs
+import app.metrics.Metrics
+import my.jdbc.wsdl_driver.auth.TokenExpiredException
 import org.slf4j.LoggerFactory
 import org.slf4j.MDC
 import java.sql.Connection
@@ -17,12 +19,16 @@ import java.util.concurrent.TimeUnit
  * through the full lifecycle: watermark read → source stream to staging → merge into
  * final table → watermark update.
  *
- * Groups are a hint for parallelism: targets sharing a group id can be scheduled in
- * parallel on the shared [etlPool]. All workers share ONE process-wide source
- * connection through [SourceDs.withConnection] (mutex-guarded) so only one SSO
- * browser window ever opens per process. Parallel workers therefore serialise on
- * the source-read phase but still parallelise ATP-side merge work. Lone targets
- * (no group or group size 1) run synchronously on the caller thread.
+ * **Groups** have two orthogonal roles:
+ *   1. **Parallel execution within a group** — targets sharing a group id are
+ *      submitted to the shared [etlPool] and run concurrently.
+ *   2. **Sequential barrier between groups** — group N+1 does not start until
+ *      group N has fully completed (useful for dimension-then-fact ordering).
+ *
+ * Each worker opens its own source connection via [SourceDs.withConnection]. The
+ * driver's in-process `TokenCache` means only the first worker triggers interactive
+ * SSO; subsequent workers reuse the cached JWT silently. Source reads and ATP-side
+ * merges therefore run truly in parallel across targets in a group.
  *
  * Idempotency: every run truncates staging and re-applies MERGE, so restarting a
  * partially-complete run cannot produce duplicates. Watermarks are persisted after
@@ -58,6 +64,11 @@ class Pipeline(private val cfg: PipelineConfig) {
         { r -> Thread(r, "etl-worker").apply { isDaemon = true } },
         ThreadPoolExecutor.CallerRunsPolicy()
     )
+
+    init {
+        // Expose pool active/queue gauges to Prometheus on `pool=etl` series.
+        Metrics.registerPoolGauges("etl", etlPool)
+    }
 
     /**
      * Run every target in the loaded config with a locally-generated runId.
@@ -107,7 +118,7 @@ class Pipeline(private val cfg: PipelineConfig) {
                 runTarget(grpTargets[0], runId)
             } else {
                 MDC.put("group", groupId.toString())
-                log.info("Group {}: scheduling {} in parallel (source reads serialise on shared connection)",
+                log.info("Group {}: running {} in parallel (each with its own source connection, SSO shared via driver TokenCache)",
                     groupId, grpTargets.map { it.name })
                 val futures = grpTargets.map { target ->
                     etlPool.submit<Unit> {
@@ -130,9 +141,10 @@ class Pipeline(private val cfg: PipelineConfig) {
      * Steps: open ATP connection (autoCommit=false, we control txn boundaries); read
      * last watermark and mark run as RUNNING; loop over pages of streaming load +
      * merge + watermark update until the source returns less than pageSize rows;
-     * mark run as OK. The source connection is borrowed per-page from the shared
-     * [SourceDs] singleton via [loadPageWithRetry] — the mutex is only held for the
-     * duration of the source read, so other workers can merge/commit in parallel.
+     * mark run as OK. Each page borrows a fresh source connection via
+     * [loadPageWithRetry] → [SourceDs.withConnection]; the driver's TokenCache
+     * ensures no extra SSO browser opens when multiple workers create connections
+     * in parallel.
      *
      * On any failure (including JVM Error like OutOfMemoryError), roll back, record
      * FAILED on a fresh connection, log — then re-throw Errors so the JVM can
@@ -146,9 +158,10 @@ class Pipeline(private val cfg: PipelineConfig) {
         OracleDs.getConnection().use { oracleConn ->
             log.info("[{}] ATP connected", t)
             oracleConn.autoCommit = false
+            var runStatus = "failed"  // Updated to "ok" on successful completion.
+            val runStartMs = System.currentTimeMillis()
             try {
-                val runStartMs = System.currentTimeMillis()
-                var lastWm = WatermarkStore.read(oracleConn, t)
+                var lastWm = WatermarkStore.read(oracleConn, target)
                 WatermarkStore.beginRun(oracleConn, t, target.watermarkColumn, runId)
                 oracleConn.commit()
 
@@ -177,7 +190,7 @@ class Pipeline(private val cfg: PipelineConfig) {
                     lastWm = result.newWm
                     lastKeyValues = result.lastKeyValues
 
-                    WatermarkStore.updateProgress(oracleConn, t, lastWm, totalLoaded)
+                    WatermarkStore.updateProgress(oracleConn, target, lastWm, totalLoaded)
                     oracleConn.commit()
 
                     if (target.pageSize != null) {
@@ -189,6 +202,7 @@ class Pipeline(private val cfg: PipelineConfig) {
                 val durationMs = System.currentTimeMillis() - runStartMs
                 WatermarkStore.finishRunOk(oracleConn, t, totalLoaded, durationMs)
                 oracleConn.commit()
+                runStatus = "ok"
                 log.info("[{}] OK: total_loaded={}, total_merged={}, duration={}ms, new_wm={}",
                     t, totalLoaded, totalMerged, durationMs, lastWm)
             } catch (e: Throwable) {
@@ -209,6 +223,11 @@ class Pipeline(private val cfg: PipelineConfig) {
                 // state (OOM, StackOverflow, etc). Plain Exceptions are swallowed —
                 // the FAILED row in ETL_WATERMARK is the caller-visible signal.
                 if (e is Error) throw e
+            } finally {
+                // Metrics: record run outcome + duration regardless of success/failure.
+                val totalMs = System.currentTimeMillis() - runStartMs
+                Metrics.runTimer(t, runStatus).record(java.time.Duration.ofMillis(totalMs))
+                Metrics.runCompleted(t, runStatus)
             }
         }
         MDC.remove("target")
@@ -248,6 +267,7 @@ class Pipeline(private val cfg: PipelineConfig) {
                     // withConnection call will re-authenticate. Just retry.
                     log.warn("[{}] Source error on attempt {}/{}: {}. Retrying (source will re-auth)...",
                         t, attempt, MAX_SOURCE_RETRIES + 1, e.message)
+                    Metrics.authRetry(t)
                 } else {
                     throw e
                 }
@@ -257,20 +277,46 @@ class Pipeline(private val cfg: PipelineConfig) {
     }
 
     /**
-     * Heuristic classifier for "is this a transient SSO/auth failure worth retrying?".
+     * Classifier for "is this a transient SSO/auth failure worth retrying?".
      *
-     * Matches on the exception message text — not ideal, but ofjdbc surfaces auth
-     * failures as generic SQLExceptions without a dedicated vendor code, so string
-     * matching is the only signal available. False positives only cost one extra
-     * reconnect+retry, so the matcher is deliberately lenient.
+     * **Primary signal** — instance check for [TokenExpiredException] anywhere in the
+     * exception cause chain. The driver raises this type with a `statusCode` field for
+     * all 401-class responses (including "Token lacks SOAP privileges"), and
+     * `PaginatedResultSet.fetchPageXml` wraps it in `SQLTimeoutException(cause=ex)`
+     * after retry exhaustion. Walking `cause` gets us the original classification
+     * independently of whatever wording the driver chooses in the wrapper.
+     *
+     * **Fallback** — substring match across the aggregated message chain. Covers:
+     *   - `"Authentication failed - invalid username or password"` raised by
+     *     `HttpClient.kt` for non-token auth failures (no dedicated exception type yet).
+     *   - Any future driver wrapping that hides the [TokenExpiredException] type.
+     *   - Generic "session closed" / "login required" variants.
+     *
+     * Bias is toward false-positive retry — cost is one extra SSO reconnect; cost of a
+     * false-negative is losing a run that could have recovered.
+     *
+     * Internal (not private) so unit tests in the same module can exercise the matcher.
      */
-    private fun isSourceAuthError(e: Exception): Boolean {
-        val msg = e.message?.lowercase() ?: ""
-        return msg.contains("401") ||
-               msg.contains("unauthorized") ||
-               msg.contains("authentication") ||
-               msg.contains("token") ||
-               msg.contains("session") ||
-               msg.contains("login")
+    internal fun isSourceAuthError(e: Throwable): Boolean {
+        // Primary: instance check on the cause chain.
+        var current: Throwable? = e
+        while (current != null) {
+            if (current is TokenExpiredException) return true
+            current = current.cause
+        }
+        // Fallback: aggregate messages across the cause chain and substring-match.
+        val messages = buildString {
+            var c: Throwable? = e
+            while (c != null) {
+                c.message?.let { append(it).append(' ') }
+                c = c.cause
+            }
+        }.lowercase()
+        return messages.contains("401") ||
+               messages.contains("unauthorized") ||
+               messages.contains("authentication") ||
+               messages.contains("token") ||
+               messages.contains("session") ||
+               messages.contains("login")
     }
 }
