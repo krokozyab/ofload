@@ -177,30 +177,7 @@ ofjdbc accepts, and the canonical format
 `yyyy-MM-dd HH:mm:ss.SSSSSS` round-trips through Oracle's TIMESTAMP(6) without
 loss.
 
-### 7. One SSO per process (race-guarded)
-
-ofjdbc owns a process-wide `TokenCache` keyed by host. First connection opens
-a browser (for BROWSER auth); subsequent connections hit the cache and return
-immediately.
-
-The catch: `BrowserAuthenticator.authenticate()` has an unguarded
-`check cache → launch browser → write cache` sequence. Three parallel workers
-starting simultaneously all miss the cache and all open browsers.
-
-`SourceDs` guards exactly that critical section with a `ReentrantLock` around
-`DriverManager.getConnection()`:
-
-```kotlin
-openLock.lock()
-try { DriverManager.getConnection(url, props) }
-finally { openLock.unlock() }
-```
-
-First caller pays SSO cost. Second caller waits briefly on the lock, finds a
-populated cache, returns immediately. No mutex is held during actual query
-execution — parallel reads happen fully concurrently afterward.
-
-### 8. Fail-fast config validation
+### 7. Fail-fast config validation
 
 Startup runs `TargetsValidator.validate(config)` before the HTTP server comes
 up. Missing `/*WM*/`, column-count mismatches, invalid watermarkType, bad
@@ -208,7 +185,7 @@ up. Missing `/*WM*/`, column-count mismatches, invalid watermarkType, bad
 to start. This catches 90% of the "only broke on first row of first run"
 class of bugs as an operator error at deploy time.
 
-### 9. Homegrown migrations runner
+### 8. Homegrown migrations runner
 
 Infrastructure DDL (ETL_WATERMARK, SCHEMA_MIGRATIONS, typed watermark
 columns) is applied automatically on startup via a ~150-line migrator. The
@@ -222,14 +199,14 @@ of schema-evolution scripts, the homegrown approach is right-sized.
 Per-target DDL (`STG_*`, `T_*`) stays manual by design — the per-target
 schemas depend on application needs and shouldn't auto-apply.
 
-### 10. Bounded pools + backpressure
+### 9. Bounded pools + backpressure
 
 Two thread pools, both bounded:
 
 - `RunManager.executor` — accepts HTTP `/run*` submissions. `RUNNER_THREADS` × `RUNNER_QUEUE_SIZE` (default 4 × 16). Overflow → `AbortPolicy` → 503 "Runner queue full". Operator sees an honest error instead of an invisible queue.
 - `Pipeline.etlPool` — runs parallel target workers. `ETL_WORKERS` × `ETL_QUEUE_SIZE` (default 8 × 32). Overflow → `CallerRunsPolicy` — the outer runner thread inlines the task. Serialises excess instead of rejecting, so a `/run` doesn't mid-group fail just because of internal backpressure.
 
-### 11. Thread-local `MDC` for structured logs
+### 10. Thread-local `MDC` for structured logs
 
 Every log line emitted inside a run carries MDC fields:
 
