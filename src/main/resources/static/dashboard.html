@@ -219,6 +219,7 @@
                             <th class="px-4 py-4">Group</th>
                             <th class="px-4 py-4">Status</th>
                             <th class="px-4 py-4 text-right">Rows Loaded</th>
+                            <th class="px-4 py-4 text-right">Total</th>
                             <th class="px-4 py-4">Last WM</th>
                             <th class="px-4 py-4">Duration</th>
                             <th class="px-4 py-4">Last Run</th>
@@ -277,6 +278,24 @@ function parseTs(s) {
     return isNaN(t) ? NaN : t;
 }
 
+// Derive logical status from the split watermark schema (currentRun/lastSuccess/lastFailure).
+// Returns an object the render code can consume without knowing the underlying columns.
+function runState(wm) {
+    if (!wm) return { status: 'NEW', running: false, failed: false, lastFinishedIso: null };
+    if (wm.currentRunStarted) {
+        return { status: 'RUNNING', running: true, failed: false, lastFinishedIso: null };
+    }
+    if (!wm.lastSuccessFinished && !wm.lastFailureFinished) {
+        return { status: 'NEW', running: false, failed: false, lastFinishedIso: null };
+    }
+    const okTs = wm.lastSuccessFinished ? parseTs(wm.lastSuccessFinished) : -Infinity;
+    const failTs = wm.lastFailureFinished ? parseTs(wm.lastFailureFinished) : -Infinity;
+    if (failTs > okTs) {
+        return { status: 'FAILED', running: false, failed: true, lastFinishedIso: wm.lastFailureFinished };
+    }
+    return { status: 'OK', running: false, failed: false, lastFinishedIso: wm.lastSuccessFinished };
+}
+
 function relativeTime(isoStr) {
     if (!isoStr) return '-';
     const now = Date.now();
@@ -304,6 +323,16 @@ function calcDuration(started, finished) {
     const sec = diffSec % 60;
     const suffix = finished ? '' : '...';
     return m + 'm ' + String(sec).padStart(2, '0') + 's' + suffix;
+}
+
+// Format a raw millisecond duration (e.g. LAST_SUCCESS_DURATION_MS) as "Xm YYs" or "Ys".
+function formatDurationMs(ms) {
+    if (ms == null || isNaN(ms)) return '-';
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    if (totalSec < 60) return totalSec + 's';
+    const m = Math.floor(totalSec / 60);
+    const sec = totalSec % 60;
+    return m + 'm ' + String(sec).padStart(2, '0') + 's';
 }
 
 // ── API calls ──────────────────────────────────────────────
@@ -387,8 +416,8 @@ function renderGroups() {
         const label = gid === 0 ? 'Ungrouped' : 'Group ' + gid;
 
         // Determine aggregate status
-        const anyRunning = targets.some(t => t.running || (t.watermark && t.watermark.lastStatus === 'RUNNING'));
-        const anyFailed = targets.some(t => t.watermark && t.watermark.lastStatus === 'FAILED');
+        const anyRunning = targets.some(t => t.running || runState(t.watermark).running);
+        const anyFailed = targets.some(t => runState(t.watermark).failed);
         let statusLabel, statusClasses, dotClasses, borderColor;
         if (anyRunning) {
             statusLabel = 'Running';
@@ -407,11 +436,11 @@ function renderGroups() {
             borderColor = 'border-green-500';
         }
 
-        // Most recent finish time for "Last run"
+        // Most recent finish time for "Last run" — later of lastSuccessFinished/lastFailureFinished.
         let latestFinish = null;
         let latestFinishStr = null;
         targets.forEach(t => {
-            const f = t.watermark && t.watermark.lastRunFinished;
+            const f = runState(t.watermark).lastFinishedIso;
             if (f) {
                 const d = parseTs(f);
                 if (!isNaN(d) && (latestFinish === null || d > latestFinish)) {
@@ -478,8 +507,9 @@ function renderTargets() {
         const groupId = cfg ? cfg.group : 0;
         const groupLabel = groupId === 0 ? 'Ungrouped' : 'Group ' + groupId;
 
-        const isRunning = t.running || wm.lastStatus === 'RUNNING';
-        const isFailed = wm.lastStatus === 'FAILED';
+        const rs = runState(wm);
+        const isRunning = t.running || rs.running;
+        const isFailed = rs.failed;
 
         // Status badge
         let statusBadge;
@@ -490,12 +520,12 @@ function renderTargets() {
         } else if (isFailed) {
             statusBadge = `<span class="px-2 py-1 bg-error-container text-on-error-container text-[11px] font-bold rounded-full">FAILED</span>`;
         } else {
-            statusBadge = `<span class="px-2 py-1 bg-green-50 text-green-700 text-[11px] font-bold rounded-full">${wm.lastStatus || 'NEW'}</span>`;
+            statusBadge = `<span class="px-2 py-1 bg-green-50 text-green-700 text-[11px] font-bold rounded-full">${rs.status}</span>`;
         }
 
-        // Error icon
-        const errorIcon = isFailed && wm.errorMessage
-            ? ` <span class="material-symbols-outlined text-error text-base cursor-help" title="${wm.errorMessage.replace(/"/g, '&quot;')}">error</span>`
+        // Error icon — only when the most recent outcome is a failure.
+        const errorIcon = isFailed && wm.lastFailureError
+            ? ` <span class="material-symbols-outlined text-error text-base cursor-help" title="${wm.lastFailureError.replace(/"/g, '&quot;')}">error</span>`
             : '';
 
         // Row classes
@@ -513,12 +543,16 @@ function renderTargets() {
             actionBtn = `<button onclick="runTarget('${t.name}')" class="bg-secondary/10 text-secondary px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-secondary hover:text-white transition-all">Run</button>`;
         }
 
-        // Duration
-        const duration = calcDuration(wm.lastRunStarted, wm.lastRunFinished);
-        // Last run relative
-        const lastRunRel = isRunning ? 'Now' : relativeTime(wm.lastRunFinished);
+        // Duration — live elapsed while running, last successful duration when idle.
+        const duration = isRunning
+            ? calcDuration(wm.currentRunStarted, null)
+            : (wm.lastSuccessDurationMs != null ? formatDurationMs(wm.lastSuccessDurationMs) : '-');
+        // Last run relative — current time if running, else most recent outcome finish.
+        const lastRunRel = isRunning ? 'Now' : relativeTime(rs.lastFinishedIso);
         // Last watermark
         const lastWm = wm.lastWm || '-';
+        // Current total rows in the target table (live COUNT(*))
+        const totalRows = t.targetRowCount != null ? formatNumber(t.targetRowCount) : '-';
 
         return `<tr class="${rowClass}">
             <td class="px-6 py-5 font-semibold text-on-surface">${t.name}${errorIcon}</td>
@@ -526,7 +560,8 @@ function renderTargets() {
                 <span class="bg-surface-container-high px-2 py-0.5 rounded text-[10px] font-bold text-on-surface-variant">${groupLabel}</span>
             </td>
             <td class="px-4 py-5">${statusBadge}</td>
-            <td class="px-4 py-5 text-right font-mono text-xs">${formatNumber(wm.rowsLoaded)}</td>
+            <td class="px-4 py-5 text-right font-mono text-xs">${formatNumber(isRunning ? (wm.currentRunRows || 0) : (wm.lastSuccessRows || 0))}</td>
+            <td class="px-4 py-5 text-right font-mono text-xs text-on-surface-variant">${totalRows}</td>
             <td class="px-4 py-5 text-on-surface-variant text-xs">${lastWm}</td>
             <td class="px-4 py-5 text-on-surface-variant">${duration}</td>
             <td class="px-4 py-5 text-on-surface-variant italic">${lastRunRel}</td>

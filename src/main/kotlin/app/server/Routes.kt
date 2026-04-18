@@ -4,6 +4,7 @@ import app.db.OracleDs
 import io.javalin.Javalin
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
+import java.util.concurrent.RejectedExecutionException
 
 private val log = LoggerFactory.getLogger("app.server.Routes")
 private val json = Json { prettyPrint = true }
@@ -51,21 +52,24 @@ fun configureRoutes(app: Javalin, runManager: RunManager, configHolder: ConfigHo
 
     /**
      * POST /run — kick off a pipeline run for every configured target.
-     * Returns 202 on success, 409 if every target was already running.
+     * Returns 202 on success, 409 if every target was already running,
+     * 503 if the runner queue is full (bounded pool backpressure).
      */
     app.post("/run") { ctx ->
-        val resp = runManager.submitAll()
-        if (resp.targets.isEmpty()) {
-            ctx.status(409).result(encode(ErrorResponse(resp.message)))
-        } else {
-            ctx.status(202).result(encode(resp))
+        try {
+            val resp = runManager.submitAll()
+            if (resp.targets.isEmpty()) ctx.status(409).result(encode(ErrorResponse(resp.message)))
+            else ctx.status(202).result(encode(resp))
+        } catch (e: RejectedExecutionException) {
+            log.warn("/run rejected: runner queue full")
+            ctx.status(503).result(encode(ErrorResponse("Runner queue full — try again later")))
         }
     }
 
     /**
      * POST /run/group/{groupId} — run only the targets of a specific group.
      * Returns 404 when no targets carry that group id, 409 when all of them were
-     * already running, 202 on success.
+     * already running, 503 on queue overflow, 202 on success.
      */
     app.post("/run/group/{groupId}") { ctx ->
         val groupId = ctx.pathParam("groupId").toIntOrNull()
@@ -73,33 +77,32 @@ fun configureRoutes(app: Javalin, runManager: RunManager, configHolder: ConfigHo
             ctx.status(400).result(encode(ErrorResponse("Invalid group ID")))
             return@post
         }
-        val resp = runManager.submitGroup(groupId)
-        if (resp == null) {
-            ctx.status(404).result(encode(ErrorResponse("No targets in group $groupId")))
-            return@post
-        }
-        if (resp.targets.isEmpty()) {
-            ctx.status(409).result(encode(ErrorResponse(resp.message)))
-        } else {
-            ctx.status(202).result(encode(resp))
+        try {
+            val resp = runManager.submitGroup(groupId)
+            if (resp == null) ctx.status(404).result(encode(ErrorResponse("No targets in group $groupId")))
+            else if (resp.targets.isEmpty()) ctx.status(409).result(encode(ErrorResponse(resp.message)))
+            else ctx.status(202).result(encode(resp))
+        } catch (e: RejectedExecutionException) {
+            log.warn("/run/group/{} rejected: runner queue full", groupId)
+            ctx.status(503).result(encode(ErrorResponse("Runner queue full — try again later")))
         }
     }
 
     /**
      * POST /run/target/{name} — run a single target.
-     * 404 if the name is unknown, 409 if already running, 202 on success.
+     * 404 if the name is unknown, 409 if already running, 503 on queue overflow,
+     * 202 on success.
      */
     app.post("/run/target/{name}") { ctx ->
         val name = ctx.pathParam("name")
-        val resp = runManager.submitTarget(name)
-        if (resp == null) {
-            ctx.status(404).result(encode(ErrorResponse("Target '$name' not found")))
-            return@post
-        }
-        if (resp.targets.isEmpty()) {
-            ctx.status(409).result(encode(ErrorResponse(resp.message)))
-        } else {
-            ctx.status(202).result(encode(resp))
+        try {
+            val resp = runManager.submitTarget(name)
+            if (resp == null) ctx.status(404).result(encode(ErrorResponse("Target '$name' not found")))
+            else if (resp.targets.isEmpty()) ctx.status(409).result(encode(ErrorResponse(resp.message)))
+            else ctx.status(202).result(encode(resp))
+        } catch (e: RejectedExecutionException) {
+            log.warn("/run/target/{} rejected: runner queue full", name)
+            ctx.status(503).result(encode(ErrorResponse("Runner queue full — try again later")))
         }
     }
 

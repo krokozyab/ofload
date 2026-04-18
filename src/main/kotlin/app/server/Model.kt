@@ -36,19 +36,31 @@ data class HealthResponse(
 )
 
 /**
- * Single row of the ETL_WATERMARK table surfaced as JSON for the status endpoint
- * and the dashboard UI. All fields come straight from the table — timestamps are
- * kept as strings to avoid timezone-conversion surprises between Oracle, JVM and JS.
+ * Single row of the ETL_WATERMARK table surfaced as JSON for the status endpoint.
+ *
+ * Split into three logical sections:
+ *  - **Progress**: [lastWm] advances per successful page (persists across runs).
+ *  - **Current run**: [currentRunStarted]/[currentRunId] are populated only while
+ *    a run is in flight. Both null means idle.
+ *  - **Outcomes**: [lastSuccessFinished]/[lastSuccessRows] records the last OK run;
+ *    [lastFailureFinished]/[lastFailureError] records the last FAILED run.
+ *    They are independent — the UI compares the two timestamps to decide which
+ *    outcome is "most recent" when the target is idle.
+ *
+ * All timestamps are ISO-8601 strings with trailing 'Z' (see WatermarkStore.toIsoUtc).
  */
 @Serializable
 data class WatermarkRow(
     val targetName: String,
     val lastWm: String?,
-    val lastStatus: String?,
-    val lastRunStarted: String?,
-    val lastRunFinished: String?,
-    val rowsLoaded: Long,
-    val errorMessage: String?
+    val currentRunStarted: String?,
+    val currentRunId: String?,
+    val currentRunRows: Long,
+    val lastSuccessFinished: String?,
+    val lastSuccessRows: Long,
+    val lastSuccessDurationMs: Long?,
+    val lastFailureFinished: String?,
+    val lastFailureError: String?
 )
 
 /**
@@ -59,7 +71,8 @@ data class WatermarkRow(
 data class TargetRunInfo(
     val name: String,
     val running: Boolean,
-    val watermark: WatermarkRow?
+    val watermark: WatermarkRow?,
+    val targetRowCount: Long? = null
 )
 
 /** Payload for /status — one [TargetRunInfo] per configured target. */

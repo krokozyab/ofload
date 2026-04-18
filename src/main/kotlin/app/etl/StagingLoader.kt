@@ -113,11 +113,27 @@ object StagingLoader {
         val keyColsCsv = target.keyColumns.joinToString(", ")
         val keyPlaceholders = target.keyColumns.joinToString(", ") { "?" }
         val firstPagePredicate = "${target.watermarkColumn} > ?"
-        val seekPredicate = "(${target.watermarkColumn} > ? OR (${target.watermarkColumn} = ? AND ($keyColsCsv) > ($keyPlaceholders)))"
+        // Scalar form for single-column keys — the row-value form `(col) > (?)` is
+        // semantically equivalent in Oracle but observed to confuse the BI Publisher
+        // SQL parser through ofjdbc's RP_ARB.xdo transport. Use scalar when we can;
+        // tuple is reserved for genuinely composite keys where it's required.
+        val seekPredicate = if (target.keyColumns.size == 1) {
+            val k = target.keyColumns[0]
+            "(${target.watermarkColumn} > ? OR (${target.watermarkColumn} = ? AND $k > ?))"
+        } else {
+            "(${target.watermarkColumn} > ? OR (${target.watermarkColumn} = ? AND ($keyColsCsv) > ($keyPlaceholders)))"
+        }
+        // Pagination is delegated to the ofjdbc driver's PaginatedResultSet, which
+        // automatically appends `OFFSET x ROWS FETCH NEXT y ROWS ONLY` to any SELECT
+        // that doesn't already contain ROWNUM/OFFSET/FETCH. Adding our own ROWNUM
+        // wrapper or FETCH clause here would make the driver fall back to sending
+        // the un-rewritten SQL on every page — producing duplicate rows because
+        // each page issues the same request without OFFSET progression.
+        // See PaginatedResultSet.rewriteQueryForPagination in the ofjdbc source.
         val query = if (target.pageSize != null) {
             val predicate = if (lastKeyValues != null) seekPredicate else firstPagePredicate
             val baseQuery = target.sourceQuery.replace(WM_MARKER, predicate)
-            "SELECT * FROM ($baseQuery ORDER BY ${target.watermarkColumn}, $keyColsCsv) WHERE ROWNUM <= ${target.pageSize}"
+            "$baseQuery ORDER BY ${target.watermarkColumn}, $keyColsCsv"
         } else {
             target.sourceQuery.replace(WM_MARKER, firstPagePredicate)
         }
@@ -130,12 +146,26 @@ object StagingLoader {
         log.info("[{}] Streaming from source (wm={}, lastKeys={}, pageSize={})",
             t, wm, lastKeyValues, target.pageSize ?: "unlimited")
 
+        // Page-size is enforced on the Java side as a second line of defense: the outer
+        // `SELECT * FROM (...) WHERE ROWNUM <= N` wrapper is not always respected by the
+        // source (e.g. the BI Publisher universal-SQL endpoint RP_ARB.xdo observably
+        // returns all matching rows regardless of ROWNUM). srcPs.maxRows is the JDBC
+        // contract hint; the while-loop check below is the guarantee.
+        val pageLimit = target.pageSize?.toLong() ?: Long.MAX_VALUE
+
         val startStream = System.currentTimeMillis()
         var count = 0L
         var newLastKeys: List<String?>? = null
 
         sourceConn.prepareStatement(query).use { srcPs ->
-            srcPs.fetchSize = BATCH_SIZE
+            // fetchSize drives ofjdbc's internal OFFSET/FETCH NEXT rewrite — each
+            // WSDL round-trip pulls this many rows. Our page size (target.pageSize)
+            // is enforced on the Java side in the while-loop below.
+            srcPs.fetchSize = target.pageSize ?: BATCH_SIZE
+            // srcPs.maxRows is intentionally NOT set — ofjdbc does not honour the
+            // JDBC-level row limit. Row cap is enforced by the Java-side break
+            // below; the driver's auto-pagination lets us close the ResultSet
+            // cleanly when we've consumed enough.
             var paramIdx = 1
             srcPs.setString(paramIdx++, wm)
             if (target.pageSize != null && lastKeyValues != null) {
@@ -149,7 +179,7 @@ object StagingLoader {
                 val colCount = rs.metaData.columnCount
                 val keyIndices = target.keyColumns.map { rs.findColumn(it) }
                 oracleConn.prepareStatement(target.targetInsert).use { insPs ->
-                    while (rs.next()) {
+                    while (count < pageLimit && rs.next()) {
                         for (i in 1..colCount) {
                             insPs.setObject(i, rs.getObject(i))
                         }
@@ -170,6 +200,9 @@ object StagingLoader {
             }
         }
         val streamTime = System.currentTimeMillis() - startStream
+        if (target.pageSize != null && count >= target.pageSize) {
+            log.info("[{}] Page filled to pageSize={}; RS closed, next page will resume via seek predicate", t, target.pageSize)
+        }
         log.info("[{}] Source: {} rows read+staged in {}ms", t, count, streamTime)
 
         if (count == 0L) return LoadResult(0, lastWm, lastKeyValues)

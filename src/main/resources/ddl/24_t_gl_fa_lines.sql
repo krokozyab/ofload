@@ -1,0 +1,21 @@
+CREATE TABLE T_GL_FA_LINES (
+    JE_HEADER_ID            NUMBER        NOT NULL,
+    JE_LINE_NUM             NUMBER        NOT NULL,
+    PERIOD_NAME             VARCHAR2(15)  NOT NULL,
+    ASSET_NUMBER            VARCHAR2(30),
+    SUBLEDGER_ID            NUMBER,
+    DESCRIPTION             VARCHAR2(240),
+    ATTRIBUTE_CATEGORY_CODE VARCHAR2(30),
+    BOOK_TYPE_CODE          VARCHAR2(15),
+    AMOUNT                  NUMBER,
+    EVENT_ID                NUMBER,
+    PO_NUMBER               VARCHAR2(30),
+    INVOICE_NUMBER          VARCHAR2(50),
+    LEDGER_ID               NUMBER        NOT NULL,
+    INV_AMOUNT              NUMBER,
+    SET_OF_BOOKS_ID         NUMBER        NOT NULL,
+    DIST_TYPE               VARCHAR2(10),
+    POSTED_DATE             DATE,
+    LAST_UPDATE_DATE        TIMESTAMP     NOT NULL,
+    CONSTRAINT PK_GL_FA_LINES PRIMARY KEY (JE_HEADER_ID, JE_LINE_NUM, SUBLEDGER_ID, DIST_TYPE)
+);

@@ -7,8 +7,10 @@ import app.etl.Pipeline
 import app.etl.WatermarkStore
 import org.slf4j.LoggerFactory
 import java.util.UUID
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 /**
@@ -23,11 +25,22 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
     private val log = LoggerFactory.getLogger(RunManager::class.java)
 
     /**
-     * Fixed thread pool for ETL runs. Sized via RUNNER_THREADS env var (default 4).
-     * Bounded on purpose — unbounded submission would overload Oracle ATP.
+     * Bounded thread pool for ETL submissions from the HTTP layer.
+     *
+     *  - `RUNNER_THREADS` (env, default 4) — how many concurrent /run* submissions we accept
+     *  - `RUNNER_QUEUE_SIZE` (env, default 16) — pending submissions held before we reject
+     *
+     * On overflow AbortPolicy throws [RejectedExecutionException] so the HTTP layer
+     * can surface a 503 with a clear "queue full" message instead of silently
+     * queueing work no operator can see or cancel.
      */
-    private val executor = Executors.newFixedThreadPool(
-        (System.getenv("RUNNER_THREADS")?.toIntOrNull() ?: 4)
+    private val runnerThreads = (System.getenv("RUNNER_THREADS")?.toIntOrNull() ?: 4)
+    private val runnerQueueSize = (System.getenv("RUNNER_QUEUE_SIZE")?.toIntOrNull() ?: 16)
+    private val executor = ThreadPoolExecutor(
+        runnerThreads, runnerThreads,
+        0L, TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue<Runnable>(runnerQueueSize),
+        ThreadPoolExecutor.AbortPolicy()
     )
 
     /**
@@ -53,13 +66,7 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
         if (toRun.isEmpty()) return RunResponse("", emptyList(), skipped.map { it.name }, "All targets already running")
 
         val runId = UUID.randomUUID().toString()
-        executor.submit {
-            try {
-                pipeline.runTargets(toRun)
-            } finally {
-                toRun.forEach { runningTargets.remove(it.name) }
-            }
-        }
+        submitToExecutor(toRun) { pipeline.runTargets(toRun, runId) }
         return RunResponse(runId, toRun.map { it.name }, skipped.map { it.name }, "Pipeline started")
     }
 
@@ -78,13 +85,7 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
         if (toRun.isEmpty()) return RunResponse("", emptyList(), skipped.map { it.name }, "All targets in group $groupId already running")
 
         val runId = UUID.randomUUID().toString()
-        executor.submit {
-            try {
-                pipeline.runTargets(toRun)
-            } finally {
-                toRun.forEach { runningTargets.remove(it.name) }
-            }
-        }
+        submitToExecutor(toRun) { pipeline.runTargets(toRun, runId) }
         return RunResponse(runId, toRun.map { it.name }, skipped.map { it.name }, "Group $groupId started")
     }
 
@@ -102,14 +103,28 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
         }
 
         val runId = UUID.randomUUID().toString()
-        executor.submit {
-            try {
-                pipeline.runTargets(listOf(target))
-            } finally {
-                runningTargets.remove(name)
-            }
-        }
+        submitToExecutor(listOf(target)) { pipeline.runTargets(listOf(target), runId) }
         return RunResponse(runId, listOf(name), emptyList(), "Target $name started")
+    }
+
+    /**
+     * Wraps executor.submit with lock-rollback on queue-full rejection.
+     *
+     * The RunManager's pool is bounded (see executor). If the caller asks to run
+     * while the pool's queue is full, AbortPolicy throws [RejectedExecutionException]
+     * and we must un-lock the targets we just reserved before propagating, otherwise
+     * those targets would be stuck in runningTargets forever. The exception then
+     * reaches the HTTP layer which maps it to 503 with a clear message.
+     */
+    private fun submitToExecutor(toRun: List<TargetConfig>, work: () -> Unit) {
+        try {
+            executor.submit {
+                try { work() } finally { toRun.forEach { runningTargets.remove(it.name) } }
+            }
+        } catch (e: RejectedExecutionException) {
+            toRun.forEach { runningTargets.remove(it.name) }
+            throw e
+        }
     }
 
     /**
@@ -121,11 +136,17 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
      * running/not-running so the operator can see what the process thinks is active.
      */
     fun getStatus(): StatusResponse {
-        val watermarks = try {
-            OracleDs.getConnection().use { conn -> WatermarkStore.readAll(conn) }
+        val (watermarks, rowCounts) = try {
+            OracleDs.getConnection().use { conn ->
+                val wms = WatermarkStore.readAll(conn)
+                val counts = configHolder.config.targets.associate { t ->
+                    t.name to countTargetRows(conn, t.targetTable)
+                }
+                wms to counts
+            }
         } catch (e: Exception) {
-            log.warn("Failed to read watermarks for status: {}", e.message)
-            emptyList()
+            log.warn("Failed to read status: {}", e.message)
+            emptyList<app.server.WatermarkRow>() to emptyMap<String, Long?>()
         }
         val wmByName = watermarks.associateBy { it.targetName }
 
@@ -133,10 +154,28 @@ class RunManager(private val configHolder: ConfigHolder, private val pipeline: P
             TargetRunInfo(
                 name = t.name,
                 running = t.name in runningTargets,
-                watermark = wmByName[t.name]
+                watermark = wmByName[t.name],
+                targetRowCount = rowCounts[t.name]
             )
         }
         return StatusResponse(targets)
+    }
+
+    /**
+     * Count rows in the target's final table. Cheap on modest datasets; may become
+     * expensive on multi-million-row targets — move to a cached background task if it
+     * ever shows up on /status timing. Returns null if the table doesn't exist yet or
+     * the query fails, so the UI can render a placeholder rather than error out.
+     */
+    private fun countTargetRows(conn: java.sql.Connection, tableName: String): Long? = try {
+        conn.createStatement().use { st ->
+            st.executeQuery("SELECT COUNT(*) FROM $tableName").use { rs ->
+                if (rs.next()) rs.getLong(1) else null
+            }
+        }
+    } catch (e: Exception) {
+        log.debug("Failed to count {}: {}", tableName, e.message)
+        null
     }
 
     /**

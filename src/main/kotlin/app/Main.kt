@@ -2,6 +2,7 @@ package app
 
 import app.config.loadConfig
 import app.db.OracleDs
+import app.db.SourceDs
 import app.etl.Pipeline
 import app.etl.WatermarkStore
 import app.server.ConfigHolder
@@ -57,6 +58,7 @@ fun main() {
         log.info("Shutting down...")
         app.stop()
         runManager.shutdown()
+        SourceDs.close()
     })
 
     log.info("Service started on port {}", port)
