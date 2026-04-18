@@ -70,8 +70,15 @@ object SourceDs : AutoCloseable {
     private fun openSerialisedForAuth(): Connection {
         val url = System.getenv("SOURCE_URL") ?: error("SOURCE_URL not set")
         val props = Properties().apply {
+            // Auth type selection — driver expects explicit `authType` property.
+            // When SOURCE_AUTH_TYPE is unset, the driver falls back to its legacy
+            // BASIC-by-default branch which requires both user and password. Setting
+            // SOURCE_AUTH_TYPE=BROWSER enables SSO (opens a browser on first use,
+            // cached token thereafter). BEARER reads the raw JWT from SOURCE_PASSWORD.
+            System.getenv("SOURCE_AUTH_TYPE")?.let { setProperty("authType", it) }
             System.getenv("SOURCE_USER")?.let { setProperty("user", it) }
             System.getenv("SOURCE_PASSWORD")?.let { setProperty("password", it) }
+            System.getenv("SOURCE_SSO_TIMEOUT")?.let { setProperty("ssoTimeout", it) }
             // ETL uses a Java-side pageSize cap + rs.close() — the driver's 75%-
             // prefetch would fire a redundant WSDL round-trip every page that then
             // gets cancelled. Pure network overhead in our usage; leave it off.

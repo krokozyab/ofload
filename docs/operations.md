@@ -361,12 +361,19 @@ pulls every line of a specific run out of mixed concurrent output.
 
 ## Authentication modes
 
-| Mode | Selected by | Suitable for | Caveats |
+Select a mode by setting `SOURCE_AUTH_TYPE` plus the appropriate credentials
+env vars:
+
+| Mode | Env vars | Suitable for | Caveats |
 |---|---|---|---|
-| **BROWSER** | `SOURCE_USER`/`SOURCE_PASSWORD` unset | Dev / demo / interactive runs | Opens a browser on first auth and on token expiry — **do not use for cron**. |
-| **BASIC** | `SOURCE_USER` + `SOURCE_PASSWORD` set | CI, simple service accounts | 401 is terminal (bad creds) — no auto-recovery, fails fast. |
-| **BEARER** | Raw JWT in `SOURCE_PASSWORD` | Short-lived test harnesses | JWT expires in ~1 h; no refresh — must be supplied fresh. |
+| **BROWSER** | `SOURCE_AUTH_TYPE=BROWSER` (user/password ignored) | Dev / demo / interactive runs | Opens a browser on first auth and on token expiry — **do not use for cron**. Optional `SOURCE_SSO_TIMEOUT=300`. |
+| **BASIC** | `SOURCE_AUTH_TYPE=BASIC` + `SOURCE_USER` + `SOURCE_PASSWORD` | CI, simple service accounts, production cron | 401 is terminal (bad creds) — no auto-recovery, fails fast. |
+| **BEARER** | `SOURCE_AUTH_TYPE=BEARER` + `SOURCE_PASSWORD=<raw JWT>` | Short-lived test harnesses | JWT expires in ~1 h; no refresh — must be supplied fresh. |
 | **CLIENT_CREDENTIALS** | Future — see [proposals/](proposals/ofjdbc-client-credentials.md) | Production unattended | Needs driver-side support; roadmap item. |
+
+**If `SOURCE_AUTH_TYPE` is unset** the driver falls back to its legacy
+BASIC-by-default branch — requires both `SOURCE_USER` and `SOURCE_PASSWORD`,
+throws `SQLException("Username required for authentication")` otherwise.
 
 For cron/scheduled production today, use **BASIC** with a dedicated Fusion
 service account whose password rotates on a schedule you control.
