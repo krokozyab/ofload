@@ -133,10 +133,6 @@ Full service walkthrough: [docs/getting-started.md](docs/getting-started.md).
 - **REST-first control plane** — `POST /run`, `/run/group/{id}`, `/run/target/{name}`
   return 202 + a `runId`; poll `/status` for completion. Designed to be called
   from OIC, cron, k8s Jobs, or any scheduler you already have.
-- **Tuple-seek pagination** — correctly resumes across watermark ties, constant
-  memory regardless of table size.
-- **One SSO per process** — driver's token cache is race-guarded so parallel
-  workers don't each open a browser.
 - **MERGE idempotency** — re-running is always safe; no tracker tables, no
   two-phase commits.
 - **Split run state** — ETL_WATERMARK cleanly separates "current run",
@@ -150,10 +146,6 @@ Full service walkthrough: [docs/getting-started.md](docs/getting-started.md).
   via a tiny homegrown migrator (no Flyway dependency).
 - **Dashboard + read-only targets page** — browse live run state and the loaded
   config; nice for humans, not required for operation.
-- **Cheap to run** — single 40 MB JAR, constant ~256 MB heap regardless of
-  table size. Runs on OCI Always Free tier, a $5 droplet, or a 250m-CPU k8s
-  pod. No per-message licensing. See
-  [docs/operations.md](docs/operations.md#where-this-runs-and-why-its-cheap).
 
 ---
 
