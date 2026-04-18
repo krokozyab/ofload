@@ -14,20 +14,33 @@ you have access to an Oracle Fusion instance and an Oracle Autonomous Database
     (recommended for ATP).
 - **Oracle Fusion access** with an account able to run BI Publisher reports
   (the exact privilege is `BI Administrator` or `BI Publisher Developer`).
-- **ofjdbc driver jar** (included in `libs/orfujdbc-1.0-SNAPSHOT.jar`; see
-  the upstream [ofjdbc repo](https://github.com/sergey-rudenko-ba/ofjdbc) for
-  newer builds).
+- **ofjdbc driver jar** — NOT shipped in this repo (the ~80 MB shaded JAR
+  would bloat git). Download the latest release from
+  [github.com/krokozyab/ofjdbc/releases](https://github.com/krokozyab/ofjdbc/releases),
+  save it as `libs/orfujdbc-1.0-SNAPSHOT.jar` (exact filename matters —
+  that's what `build.gradle.kts` references), then continue with the build
+  step below.
 
-## 1. Clone and build
+## 1. Clone the repo and install the ofjdbc driver
 
 ```bash
 git clone https://github.com/<you>/ofload.git
 cd ofload
+
+# Download the ofjdbc driver JAR from its GitHub releases page
+# https://github.com/krokozyab/ofjdbc/releases
+# Then drop it into libs/ under the exact filename the build expects:
+mkdir -p libs
+curl -L -o libs/orfujdbc-1.0-SNAPSHOT.jar \
+  https://github.com/krokozyab/ofjdbc/releases/download/<release-tag>/orfujdbc-1.0-SNAPSHOT.jar
+
+# Build + unit tests (integration tests skip without DB credentials)
 ./gradlew build
 ```
 
-This should produce `build/libs/ofload-1.0-SNAPSHOT-all.jar` and pass all
-unit tests (integration tests skip automatically without DB credentials).
+This produces `build/libs/ofload-1.0-SNAPSHOT-all.jar`. If the build fails
+with `orfujdbc-1.0-SNAPSHOT.jar not found`, the driver isn't in `libs/` —
+go back and download it.
 
 ## 2. Configure environment
 

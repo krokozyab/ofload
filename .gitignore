@@ -50,3 +50,6 @@ run.sh
 
 ### Claude Code (local agent state/permissions) ###
 .claude/
+
+### ofjdbc driver (~80 MB — download from https://github.com/krokozyab/ofjdbc/releases) ###
+libs/*.jar
