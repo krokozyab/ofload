@@ -14,6 +14,10 @@ The built-in dashboard exists for humans (ops, dev, demos). In production,
 **scheduling and orchestration live in your existing tooling** — `ofload` is
 just the worker on the other end of the HTTP call.
 
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="ofload dashboard — Groups Overview + Targets Pipeline with live run state" width="860">
+</p>
+
 ---
 
 ## The 30-second pitch
