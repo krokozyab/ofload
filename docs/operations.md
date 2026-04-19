@@ -24,8 +24,8 @@ That makes it comfortable to run on essentially any small compute:
 | **On-prem Linux box** | Anything that fits `java -jar` | free (existing hardware) |
 | **Kubernetes pod** | 250m CPU / 512 MB RAM request | whatever your cluster costs |
 
-The JAR is ~40 MB with all dependencies (Oracle JDBC + ofjdbc + Javalin +
-Micrometer + Kotlin stdlib). Docker image lands under 200 MB on top of
+The fat JAR is ~100 MB (most of that is the ofjdbc driver itself, which
+bundles SOAP / XML stacks). Docker image lands under 300 MB on top of
 `eclipse-temurin:21-jre`. Cold start is 2–3 s.
 
 **Why it's so cheap compared to the alternatives:**
@@ -56,14 +56,27 @@ object storage + ODI licensing) is routinely orders of magnitude more.
 ### Single JAR
 
 `./gradlew shadowJar` produces `build/libs/ofload-1.0-SNAPSHOT-all.jar` —
-a fat JAR containing all dependencies including the ofjdbc driver. The
-minimal run command is:
+a fat (uber / shadow) JAR bundling every runtime dependency (ofjdbc driver,
+Oracle JDBC, Javalin, Kotlin stdlib, etc.) into one ~100 MB file. Self-
+contained — you can `scp` it to any host with Java 21+ and run it.
 
 ```bash
 java -jar build/libs/ofload-1.0-SNAPSHOT-all.jar
 ```
 
-All configuration is env-var driven — see [env-vars.md](env-vars.md).
+Production-oriented invocation (capped heap, fail-fast on OOM):
+
+```bash
+java -Xmx512m \
+     -XX:+ExitOnOutOfMemoryError \
+     -Dfile.encoding=UTF-8 \
+     -jar /opt/ofload/ofload-1.0-SNAPSHOT-all.jar
+```
+
+All configuration is env-var driven — see [env-vars.md](env-vars.md). See
+[docs/getting-started.md — Build a deployable JAR](getting-started.md#9-build-a-deployable-jar)
+for the full shadowJar walkthrough including JDK installation tips for
+readers new to the JVM ecosystem.
 
 ### Docker
 

@@ -247,7 +247,94 @@ For orchestrators that need to wait for completion, poll `/status` until the
 target returns to non-RUNNING state. The response body includes `runId` so
 you can correlate logs.
 
-## 9. Next steps
+## 9. Build a deployable JAR
+
+`./gradlew run` is for development — it compiles, applies migrations, and
+starts the service in one step, but it depends on Gradle being present and
+keeps the process tied to your shell. For **production deployment** you want
+a single self-contained file you can copy to a server and run with plain
+Java.
+
+### Two kinds of JARs
+
+Gradle produces two files under `build/libs/` when you build:
+
+| File | Size | Contains | When to use |
+|---|---|---|---|
+| `ofload-1.0-SNAPSHOT.jar` | ~200 KB | Only your compiled code | Never directly — it's missing dependencies |
+| `ofload-1.0-SNAPSHOT-all.jar` | ~100 MB | Your code **+ every dependency** (ofjdbc driver, Oracle JDBC, Javalin, Kotlin stdlib, etc.) | **This** is what you ship to production |
+
+The second one is called a **fat JAR** (or *uber JAR* / *shadow JAR* —
+different names for the same thing: a single archive with everything
+flattened together so it needs nothing else on the classpath).
+
+Most of its ~100 MB comes from the ofjdbc driver (which itself bundles SOAP
+XML libraries, Apache HTTP client, and Kotlin runtime — hence the size).
+
+### Building it
+
+```bash
+./gradlew shadowJar
+```
+
+This task compiles the code, pulls in every runtime dependency, and emits
+`build/libs/ofload-1.0-SNAPSHOT-all.jar`.
+
+(`./gradlew build` also produces this file as a side effect along with
+running tests. `shadowJar` is just the minimal invocation if you only want
+the JAR and not the test run.)
+
+### Running it
+
+On any machine with Java 21+ installed:
+
+```bash
+# Set the env vars (same as in step 2)
+export DB_USER=... DB_PASSWORD=... DB_CONNECT_STRING=...
+export TNS_ADMIN=/path/to/wallet
+export SOURCE_DRIVER_CLASS=my.jdbc.wsdl_driver.WsdlDriver
+export SOURCE_URL=... SOURCE_AUTH_TYPE=BASIC SOURCE_USER=... SOURCE_PASSWORD=...
+
+# Run
+java -jar ofload-1.0-SNAPSHOT-all.jar
+```
+
+That's it — the JAR is self-contained. No `libs/`, no Gradle, no source tree
+needed on the target machine.
+
+### What Java version, where to get it
+
+You need a **JDK 21 or newer**. Three easy ways:
+
+- **SDKMAN** (Mac / Linux) — `sdk install java 21.0.2-tem` then `sdk use java 21.0.2-tem`.
+- **Homebrew** (Mac) — `brew install openjdk@21`.
+- **apt / dnf** (Linux) — `sudo apt install openjdk-21-jre` (Debian/Ubuntu) or `sudo dnf install java-21-openjdk` (RHEL/Fedora).
+- **Official distributions** — Eclipse Temurin, Amazon Corretto, Oracle Java SE. All work.
+
+Verify with `java -version`. It should print `21.0.x` or higher.
+
+For Docker / Kubernetes deployments, base images like
+`eclipse-temurin:21-jre` give you a pre-installed runtime in ~200 MB — see
+[docs/operations.md#docker](operations.md#docker) for a Dockerfile skeleton.
+
+### Tuning JVM for production
+
+Reasonable defaults for a 1 GB RAM machine:
+
+```bash
+java -Xmx512m \
+     -XX:+ExitOnOutOfMemoryError \
+     -Dfile.encoding=UTF-8 \
+     -jar ofload-1.0-SNAPSHOT-all.jar
+```
+
+- `-Xmx512m` caps heap at 512 MB — plenty for our bounded-memory streaming.
+- `-XX:+ExitOnOutOfMemoryError` kills the JVM on OOM so the process
+  supervisor (systemd / k8s) can restart cleanly instead of limping along.
+- `-Dfile.encoding=UTF-8` standardises encoding across platforms (Oracle
+  sometimes cares).
+
+## 10. Next steps
 
 - Add more targets — see [targets-json.md](targets-json.md) for field details.
 - Wire up Prometheus scraping at `/metrics` — see [operations.md](operations.md).
